@@ -1,5 +1,4 @@
-# -
-儿童故事生成与情感分析系统设计与实现​
+```
 kids_story_ai/
 ├── app.py                            # Flask 应用入口
 ├── config.py                         # 配置文件（API Key、模型设置）
@@ -28,3 +27,4 @@ kids_story_ai/
 ├── logs/                             # 日志文件、情感记录（可选）
 │
 └── README.md                         # 项目说明
+```
