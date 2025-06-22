@@ -18,9 +18,7 @@ kids_story_ai/
 │   └── content_filter.py             # 年龄过滤与敏感词排查
 │
 ├── data/                             # 存储原始素材库（txt等）
-│   ├── fairy_tales/
-│   ├── modern_stories/
-│   └── folk_legends/
+│   ├── storys/
 │
 ├── uploads/                          # 用户上传的音频/文本等交互数据（用于分析）
 │
