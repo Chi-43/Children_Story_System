@@ -1,0 +1,12 @@
+# IDE配置
+.idea/
+.venv/
+
+# 依赖目录
+ai_chat_ui/node_modules/
+
+# 环境文件
+.env
+
+# 教程目录
+LangChain-OpenTutorial-main/
