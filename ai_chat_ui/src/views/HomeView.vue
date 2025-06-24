@@ -216,58 +216,91 @@ const setTheme = (theme) => {
   storyForm.value.theme = theme;
 };
 
-// 生成故事
-const generateStory = async () => {
-  if (!storyForm.value.theme.trim()) {
-    ElMessage.warning("请输入故事主题");
-    return;
-  }
+  // 生成故事
+  const generateStory = async () => {
+    if (!storyForm.value.theme.trim()) {
+      ElMessage.warning("请输入故事主题");
+      return;
+    }
 
-  const userMsg = {
-    role: "user",
-    content: `请求生成故事：
+    const userMsg = {
+      role: "user",
+      content: `请求生成故事：
       年龄: ${storyForm.value.age}岁
       主题: ${storyForm.value.theme}
       要求: ${storyForm.value.requirements}
       长度: ${storyForm.value.length}字`,
-    timestamp: new Date().toLocaleTimeString(),
-  };
-
-  currentMessages.value.push(userMsg);
-  saveConversations();
-  scrollToBottom();
-
-  try {
-    isSending.value = true;
-    const response = await axios.post(
-      "http://localhost:5000/api/generate_story",
-      {
-        age: storyForm.value.age,
-        theme: storyForm.value.theme,
-        requirements: storyForm.value.requirements,
-        length: storyForm.value.length,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${authStore.token}`,
-        },
-      }
-    );
-
-    const aiMsg = {
-      role: "ai",
-      content: response.data.story,
       timestamp: new Date().toLocaleTimeString(),
     };
-    currentMessages.value.push(aiMsg);
+
+    currentMessages.value.push(userMsg);
     saveConversations();
     scrollToBottom();
-  } catch (error) {
-    ElMessage.error("生成故事失败: " + error.message);
-  } finally {
-    isSending.value = false;
-  }
-};
+
+    try {
+      isSending.value = true;
+      
+      // 创建AI消息占位
+      const aiMsg = {
+        role: "ai",
+        content: "",
+        timestamp: new Date().toLocaleTimeString(),
+      };
+      currentMessages.value.push(aiMsg);
+      saveConversations();
+      
+      // 使用fetch API实现SSE (POST方法)
+      const response = await fetch(
+        "http://localhost:5000/api/generate_story",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authStore.token}`,
+          },
+          body: JSON.stringify({
+            age: storyForm.value.age,
+            theme: storyForm.value.theme,
+            requirements: storyForm.value.requirements,
+            length: storyForm.value.length,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          isSending.value = false;
+          break;
+        }
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+        
+        for (const line of lines) {
+          if (line.startsWith('data:')) {
+            const data = JSON.parse(line.substring(5).trim());
+            if (data.text) {
+              aiMsg.content += data.text;
+              currentMessages.value = [...currentMessages.value];
+              saveConversations();
+              scrollToBottom();
+            }
+          }
+        }
+      }
+    } catch (error) {
+      ElMessage.error("生成故事失败: " + error.message);
+      isSending.value = false;
+    }
+  };
 
 // 情感分析
 const analyzeSentiment = async (text) => {

@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
+import json
 from flask_cors import CORS
 import jwt as pyjwt
 import datetime
@@ -210,7 +211,7 @@ def ask_question():
 
 
 # 故事生成API
-@app.route('/api/generate_story', methods=['POST'])
+@app.route('/api/generate_story', methods=['GET', 'POST'])
 def generate_story():
     # 验证JWT
     auth_header = request.headers.get('Authorization')
@@ -232,15 +233,46 @@ def generate_story():
         return jsonify({'error': '缺少必要参数'}), 400
     
     try:
-        print(f"调用通义千问API生成故事，参数: {data}")
-        result = story_chain.invoke({
-            'age': data['age'],
-            'theme': data['theme'],
-            'requirements': data['requirements'],
-            'length': data['length']
-        })
-        print("故事生成成功")
-        return jsonify({'story': result})
+        print(f"调用通义千问API生成故事(流式)，参数: {data}")
+        
+        # 构建流式请求
+        url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
+        headers = {
+            "Authorization": f"Bearer {app.config['TONGYI_API_KEY']}",
+            "Content-Type": "application/json",
+            "X-DashScope-SSE": "enable"  # 启用服务器发送事件
+        }
+        payload = {
+            "model": "qwen-turbo",
+            "input": {
+                "messages": [{
+                    "role": "user",
+                    "content": story_template.format(
+                        age=data['age'],
+                        theme=data['theme'],
+                        requirements=data['requirements'],
+                        length=data['length']
+                    )
+                }]
+            },
+            "parameters": {
+                "incremental_output": True  # 启用增量输出
+            }
+        }
+        
+        def generate():
+            with requests.post(url, json=payload, headers=headers, stream=True) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if line:
+                        decoded_line = line.decode('utf-8')
+                        if decoded_line.startswith('data:'):
+                            data = json.loads(decoded_line[5:])
+                            if 'output' in data and 'text' in data['output']:
+                                yield f"data: {json.dumps({'text': data['output']['text']})}\n\n"
+        
+        return Response(generate(), mimetype='text/event-stream')
+        
     except Exception as e:
         print(f"故事生成失败，详细错误: {str(e)}")
         app.logger.error(f"故事生成失败: {str(e)}")
