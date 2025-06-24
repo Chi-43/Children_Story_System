@@ -7,6 +7,8 @@ ai_chat_ui/node_modules/
 
 # 环境文件
 .env
+backend/.env
+test/
 
 # 教程目录
 LangChain-OpenTutorial-main/

@@ -63,45 +63,79 @@
                     msg.role === "user" ? "你" : "AI助手"
                   }}</span>
                   <span class="message-time">{{ msg.timestamp }}</span>
+                  <el-button 
+                    v-if="msg.role === 'ai' && msg.content.length > 10" 
+                    size="small" 
+                    @click="analyzeSentiment(msg.content)"
+                    class="sentiment-btn"
+                  >
+                    情感分析
+                  </el-button>
                 </div>
                 <div class="message-body">{{ msg.content }}</div>
+                <div v-if="msg.sentiment" class="sentiment-result">
+                  <el-tag :type="getSentimentTagType(msg.sentiment.label)">
+                    {{ getSentimentLabel(msg.sentiment.label) }} 
+                    ({{ (msg.sentiment.score * 100).toFixed(1) }}%)
+                  </el-tag>
+                  <p v-if="msg.sentiment.recommendation" class="recommendation">
+                    {{ msg.sentiment.recommendation }}
+                  </p>
+                </div>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- 输入区域保持不变 -->
+        <!-- 故事生成表单 -->
         <div class="input-area">
-          <el-input
-            v-model="userInput"
-            type="textarea"
-            :rows="3"
-            placeholder="输入你想听的故事主题..."
-            @keyup.enter.native="sendMessage"
-          />
-          <el-button
-            type="primary"
-            @click="sendMessage"
-            :loading="isSending"
-            class="send-btn"
-          >
-            发送
-          </el-button>
+          <el-form :model="storyForm" label-width="80px">
+            <el-form-item label="儿童年龄">
+              <el-input-number v-model="storyForm.age" :min="3" :max="12" />
+            </el-form-item>
+            <el-form-item label="故事主题">
+              <el-input v-model="storyForm.theme" placeholder="如：勇敢、友谊等" />
+            </el-form-item>
+            <el-form-item label="特殊要求">
+              <el-input 
+                v-model="storyForm.requirements" 
+                type="textarea" 
+                placeholder="如：主角是小狗、要有魔法元素等" 
+              />
+            </el-form-item>
+            <el-form-item label="故事长度">
+              <el-select v-model="storyForm.length" placeholder="请选择">
+                <el-option label="短篇(约200字)" value="200" />
+                <el-option label="中篇(约500字)" value="500" />
+                <el-option label="长篇(约1000字)" value="1000" />
+              </el-select>
+            </el-form-item>
+            <el-form-item>
+              <el-button
+                type="primary"
+                @click="generateStory"
+                :loading="isSending"
+                class="send-btn"
+              >
+                生成故事
+              </el-button>
+            </el-form-item>
+          </el-form>
 
-          <!-- 将热门主题移动到输入框下方 -->
+          <!-- 热门主题推荐 -->
           <div class="popular-themes">
             <h4>热门故事主题：</h4>
             <ul>
-              <li @click="isThemeClick = true; userInput = '勇敢的小兔子'; sendMessage()">
+              <li @click="setTheme('勇敢的小兔子')">
                 <strong>勇敢的小兔子</strong>
               </li>
-              <li @click="isThemeClick = true; userInput = '友谊的力量'; sendMessage()">
+              <li @click="setTheme('友谊的力量')">
                 <strong>友谊的力量</strong>
               </li>
-              <li @click="isThemeClick = true; userInput = '森林冒险'; sendMessage()">
+              <li @click="setTheme('森林冒险')">
                 <strong>森林冒险</strong>
               </li>
-              <li @click="isThemeClick = true; userInput = '超级英雄'; sendMessage()">
+              <li @click="setTheme('超级英雄')">
                 <strong>超级英雄</strong>
               </li>
             </ul>
@@ -122,13 +156,19 @@ import { ElMessage } from "element-plus";
 
 const authStore = useAuthStore();
 
-const userInput = ref("");
+const storyForm = ref({
+  age: 6,
+  theme: "",
+  requirements: "",
+  length: "500"
+});
+
 const isSending = ref(false);
 const conversations = ref([]);
 const currentMessages = ref([]);
 const activeConversation = ref(0);
 const messageList = ref(null);
-const isThemeClick = ref(false);
+const isAnalyzing = ref(false);
 
 const userAvatar = computed(
   () =>
@@ -168,13 +208,25 @@ const selectConversation = (index) => {
   currentMessages.value = conversations.value[index].messages;
 };
 
-// 发送消息
-const sendMessage = async () => {
-  if (!userInput.value.trim()) return;
+// 设置主题
+const setTheme = (theme) => {
+  storyForm.value.theme = theme;
+};
+
+// 生成故事
+const generateStory = async () => {
+  if (!storyForm.value.theme.trim()) {
+    ElMessage.warning("请输入故事主题");
+    return;
+  }
 
   const userMsg = {
     role: "user",
-    content: userInput.value,
+    content: `请求生成故事：
+      年龄: ${storyForm.value.age}岁
+      主题: ${storyForm.value.theme}
+      要求: ${storyForm.value.requirements}
+      长度: ${storyForm.value.length}字`,
     timestamp: new Date().toLocaleTimeString(),
   };
 
@@ -185,9 +237,12 @@ const sendMessage = async () => {
   try {
     isSending.value = true;
     const response = await axios.post(
-      "http://localhost:5000/api/ask",
+      "http://localhost:5000/api/generate_story",
       {
-        question: userInput.value,
+        age: storyForm.value.age,
+        theme: storyForm.value.theme,
+        requirements: storyForm.value.requirements,
+        length: storyForm.value.length,
       },
       {
         headers: {
@@ -198,21 +253,79 @@ const sendMessage = async () => {
 
     const aiMsg = {
       role: "ai",
-      content: response.data.answer,
+      content: response.data.story,
       timestamp: new Date().toLocaleTimeString(),
     };
     currentMessages.value.push(aiMsg);
     saveConversations();
     scrollToBottom();
   } catch (error) {
-    ElMessage.error("发送消息失败: " + error.message);
+    ElMessage.error("生成故事失败: " + error.message);
   } finally {
-    if (!isThemeClick.value) {
-      userInput.value = "";
-    }
     isSending.value = false;
-    isThemeClick.value = false;
   }
+};
+
+// 情感分析
+const analyzeSentiment = async (text) => {
+  try {
+    isAnalyzing.value = true;
+    const response = await axios.post(
+      "http://localhost:5000/api/analyze_sentiment",
+      { text },
+      {
+        headers: {
+          Authorization: `Bearer ${authStore.token}`,
+        },
+      }
+    );
+
+    const sentiment = response.data;
+    sentiment.recommendation = getRecommendation(sentiment.label);
+    
+    // 更新当前消息的情感分析结果
+    const msgIndex = currentMessages.value.findIndex(
+      (msg) => msg.content === text
+    );
+    if (msgIndex !== -1) {
+      currentMessages.value[msgIndex].sentiment = sentiment;
+      saveConversations();
+    }
+  } catch (error) {
+    ElMessage.error("情感分析失败: " + error.message);
+  } finally {
+    isAnalyzing.value = false;
+  }
+};
+
+// 获取情感标签显示文本
+const getSentimentLabel = (label) => {
+  const labels = {
+    "LABEL_0": "负面",
+    "LABEL_1": "中性", 
+    "LABEL_2": "正面"
+  };
+  return labels[label] || label;
+};
+
+// 获取情感标签类型
+const getSentimentTagType = (label) => {
+  const types = {
+    "LABEL_0": "danger",
+    "LABEL_1": "info",
+    "LABEL_2": "success"
+  };
+  return types[label] || "";
+};
+
+// 获取推荐内容
+const getRecommendation = (label) => {
+  const recommendations = {
+    "LABEL_0": "检测到负面情绪，推荐阅读积极向上的故事",
+    "LABEL_1": "故事情感中性，可以尝试更有趣的主题",
+    "LABEL_2": "故事情感积极，继续保持哦！"
+  };
+  return recommendations[label] || "";
 };
 
 // 保存对话
@@ -443,6 +556,31 @@ onMounted(() => {
   padding: 12px 18px;
   border-radius: 12px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  white-space: pre-line;
+}
+
+.sentiment-btn {
+  margin-left: 10px;
+  background: linear-gradient(135deg, #ff7675 0%, #fdcb6e 100%);
+  color: white;
+  border: none;
+}
+
+.sentiment-result {
+  margin-top: 10px;
+  padding: 10px;
+  background-color: rgba(255, 255, 255, 0.8);
+  border-radius: 8px;
+}
+
+.sentiment-result .el-tag {
+  margin-right: 10px;
+}
+
+.recommendation {
+  margin: 5px 0 0;
+  font-size: 0.9em;
+  color: #666;
 }
 
 .user .message-body {
