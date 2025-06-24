@@ -63,9 +63,9 @@
                     msg.role === "user" ? "你" : "AI助手"
                   }}</span>
                   <span class="message-time">{{ msg.timestamp }}</span>
-                  <el-button 
-                    v-if="msg.role === 'ai' && msg.content.length > 10" 
-                    size="small" 
+                  <el-button
+                    v-if="msg.role === 'ai' && msg.content.length > 10"
+                    size="small"
                     @click="analyzeSentiment(msg.content)"
                     class="sentiment-btn"
                   >
@@ -75,7 +75,7 @@
                 <div class="message-body">{{ msg.content }}</div>
                 <div v-if="msg.sentiment" class="sentiment-result">
                   <el-tag :type="getSentimentTagType(msg.sentiment.label)">
-                    {{ getSentimentLabel(msg.sentiment.label) }} 
+                    {{ getSentimentLabel(msg.sentiment.label) }}
                     ({{ (msg.sentiment.score * 100).toFixed(1) }}%)
                   </el-tag>
                   <p v-if="msg.sentiment.recommendation" class="recommendation">
@@ -94,13 +94,16 @@
               <el-input-number v-model="storyForm.age" :min="3" :max="12" />
             </el-form-item>
             <el-form-item label="故事主题">
-              <el-input v-model="storyForm.theme" placeholder="如：勇敢、友谊等" />
+              <el-input
+                v-model="storyForm.theme"
+                placeholder="如：勇敢、友谊等"
+              />
             </el-form-item>
             <el-form-item label="特殊要求">
-              <el-input 
-                v-model="storyForm.requirements" 
-                type="textarea" 
-                placeholder="如：主角是小狗、要有魔法元素等" 
+              <el-input
+                v-model="storyForm.requirements"
+                type="textarea"
+                placeholder="如：主角是小狗、要有魔法元素等"
               />
             </el-form-item>
             <el-form-item label="故事长度">
@@ -160,7 +163,7 @@ const storyForm = ref({
   age: 6,
   theme: "",
   requirements: "",
-  length: "500"
+  length: "500",
 });
 
 const isSending = ref(false);
@@ -282,7 +285,7 @@ const analyzeSentiment = async (text) => {
 
     const sentiment = response.data;
     sentiment.recommendation = getRecommendation(sentiment.label);
-    
+
     // 更新当前消息的情感分析结果
     const msgIndex = currentMessages.value.findIndex(
       (msg) => msg.content === text
@@ -301,9 +304,9 @@ const analyzeSentiment = async (text) => {
 // 获取情感标签显示文本
 const getSentimentLabel = (label) => {
   const labels = {
-    "LABEL_0": "负面",
-    "LABEL_1": "中性", 
-    "LABEL_2": "正面"
+    LABEL_0: "负面",
+    LABEL_1: "中性",
+    LABEL_2: "正面",
   };
   return labels[label] || label;
 };
@@ -311,9 +314,9 @@ const getSentimentLabel = (label) => {
 // 获取情感标签类型
 const getSentimentTagType = (label) => {
   const types = {
-    "LABEL_0": "danger",
-    "LABEL_1": "info",
-    "LABEL_2": "success"
+    LABEL_0: "danger",
+    LABEL_1: "info",
+    LABEL_2: "success",
   };
   return types[label] || "";
 };
@@ -321,9 +324,9 @@ const getSentimentTagType = (label) => {
 // 获取推荐内容
 const getRecommendation = (label) => {
   const recommendations = {
-    "LABEL_0": "检测到负面情绪，推荐阅读积极向上的故事",
-    "LABEL_1": "故事情感中性，可以尝试更有趣的主题",
-    "LABEL_2": "故事情感积极，继续保持哦！"
+    LABEL_0: "检测到负面情绪，推荐阅读积极向上的故事",
+    LABEL_1: "故事情感中性，可以尝试更有趣的主题",
+    LABEL_2: "故事情感积极，继续保持哦！",
   };
   return recommendations[label] || "";
 };
