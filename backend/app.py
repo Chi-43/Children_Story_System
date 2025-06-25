@@ -52,17 +52,18 @@ text_splitter = RecursiveCharacterTextSplitter(
 
 # 情感分析模型
 try:
+    print("正在初始化情感分析模型...")
     sentiment_analyzer = pipeline(
         "text-classification",
-        model="bert-base-chinese",
-        tokenizer="bert-base-chinese",
-        device="cpu",  # 使用CPU运行
-        timeout=30  # 增加超时时间
+        model="finiteautomata/bertweet-base-sentiment-analysis",
+        tokenizer="finiteautomata/bertweet-base-sentiment-analysis",
+        device="cpu",
+        return_all_scores=True
     )
+    print("情感分析模型初始化成功")
 except Exception as e:
     print(f"初始化情感分析模型失败: {str(e)}")
     sentiment_analyzer = None
-
 
 # 初始化数据库
 def init_db():
@@ -76,7 +77,6 @@ def init_db():
     conn.close()
 
 init_db()
-
 
 # JWT工具函数
 def create_token(user_id):
@@ -101,7 +101,6 @@ def register():
     try:
         conn = sqlite3.connect('database.db')
         c = conn.cursor()
-        # 先检查用户是否已存在
         c.execute("SELECT id FROM users WHERE username=?", (username,))
         if c.fetchone():
             return jsonify({
@@ -115,7 +114,7 @@ def register():
         conn.commit()
         user_id = c.lastrowid
         conn.close()
-        print(f"成功注册用户: {username}, ID: {user_id}")  # 添加调试日志
+        print(f"成功注册用户: {username}, ID: {user_id}")
         
         token = create_token(user_id)
         return jsonify({'token': token, 'user_id': user_id}), 201
@@ -151,7 +150,6 @@ def login():
 # 调用通义千问API
 @app.route('/api/ask', methods=['POST'])
 def ask_question():
-    # 验证JWT
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
         return jsonify({'error': '未提供有效的认证token'}), 401
@@ -172,7 +170,6 @@ def ask_question():
     question = data['question']
     
     try:
-        # 调用通义千问API
         url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
         headers = {
             "Authorization": f"Bearer {app.config['TONGYI_API_KEY']}",
@@ -209,11 +206,9 @@ def ask_question():
         app.logger.error(f'API响应解析失败: {str(e)}')
         return jsonify({'error': str(e)}), 500
 
-
 # 故事生成API
 @app.route('/api/generate_story', methods=['GET', 'POST'])
 def generate_story():
-    # 验证JWT
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
         return jsonify({'error': '未提供有效的认证token'}), 401
@@ -235,12 +230,11 @@ def generate_story():
     try:
         print(f"调用通义千问API生成故事(流式)，参数: {data}")
         
-        # 构建流式请求
         url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
         headers = {
             "Authorization": f"Bearer {app.config['TONGYI_API_KEY']}",
             "Content-Type": "application/json",
-            "X-DashScope-SSE": "enable"  # 启用服务器发送事件
+            "X-DashScope-SSE": "enable"
         }
         payload = {
             "model": "qwen-turbo",
@@ -256,7 +250,7 @@ def generate_story():
                 }]
             },
             "parameters": {
-                "incremental_output": True  # 启用增量输出
+                "incremental_output": True
             }
         }
         
@@ -281,7 +275,6 @@ def generate_story():
 # 加载故事素材
 @app.route('/api/load_stories', methods=['POST'])
 def load_stories():
-    # 验证JWT
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
         return jsonify({'error': '未提供有效的认证token'}), 401
@@ -312,7 +305,6 @@ def load_stories():
 # 情感分析API
 @app.route('/api/analyze_sentiment', methods=['POST'])
 def analyze_sentiment():
-    # 验证JWT
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
         return jsonify({'error': '未提供有效的认证token'}), 401
@@ -333,12 +325,63 @@ def analyze_sentiment():
         return jsonify({'error': '情感分析服务暂不可用，请稍后再试'}), 503
         
     try:
-        result = sentiment_analyzer(request.json['text'])
+        text = request.json['text']
+        print(f"开始情感分析: {text[:50]}...")
+        
+        # 文本分块处理(每块500字符)
+        chunk_size = 500
+        chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+        
+        results = []
+        for chunk in chunks:
+            try:
+                print(f"正在分析文本块: {chunk[:50]}...")
+                chunk_result = sentiment_analyzer(chunk)
+                print(f"原始分析结果: {chunk_result}")
+                
+                # 处理返回结果
+                if isinstance(chunk_result, list):
+                    if len(chunk_result) > 0:
+                        if isinstance(chunk_result[0], dict) and 'label' in chunk_result[0]:
+                            results.extend(chunk_result)
+                        elif isinstance(chunk_result[0], list):
+                            results.extend([item for sublist in chunk_result for item in sublist])
+            
+            except Exception as e:
+                print(f"分析文本块时出错: {str(e)}")
+                continue
+                
+        if not results:
+            raise ValueError("情感分析未返回有效结果")
+        
+        print(f"最终结果集: {results}")
+            
+        # 计算整体情感
+        avg_scores = {}
+        label_mapping = {'POS': 'POSITIVE', 'NEU': 'NEUTRAL', 'NEG': 'NEGATIVE'}
+        for orig_label, mapped_label in label_mapping.items():
+            scores = [r['score'] for r in results if r.get('label') == orig_label]
+            avg_scores[mapped_label] = sum(scores)/len(scores) if scores else 0
+            
+        primary_sentiment = max(avg_scores, key=avg_scores.get)
+        primary_score = avg_scores[primary_sentiment]
+        
+        # 生成详细建议
+        recommendations = {
+            'POSITIVE': '内容积极向上，适合继续阅读类似故事',
+            'NEUTRAL': '内容情感中性，可以尝试更有趣的主题',
+            'NEGATIVE': '检测到负面情绪，建议阅读积极内容调节心情'
+        }
+        
         return jsonify({
-            'sentiment': result[0]['label'],
-            'score': result[0]['score']
+            'analysis': results,
+            'primary_sentiment': primary_sentiment,
+            'primary_score': primary_score,
+            'recommendation': recommendations[primary_sentiment],
+            'detail': f"分析了{len(chunks)}个文本块，综合评估情感为{primary_sentiment}"
         })
     except Exception as e:
+        print(f"情感分析处理失败: {str(e)}")
         return jsonify({'error': f'情感分析失败: {str(e)}'}), 500
 
 if __name__ == '__main__':

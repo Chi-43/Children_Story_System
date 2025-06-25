@@ -81,6 +81,28 @@
                   <p v-if="msg.sentiment.recommendation" class="recommendation">
                     {{ msg.sentiment.recommendation }}
                   </p>
+                  <p v-if="msg.sentiment.detail" class="detail">
+                    {{ msg.sentiment.detail }}
+                  </p>
+                  <el-collapse>
+                    <el-collapse-item title="查看详细分析">
+                      <div
+                        v-for="(item, index) in msg.sentiment.analysis"
+                        :key="index"
+                        class="analysis-item"
+                      >
+                        <el-tag
+                          :type="getSentimentTagType(item.label)"
+                          size="small"
+                        >
+                          {{ getSentimentLabel(item.label) }}
+                        </el-tag>
+                        <span class="analysis-score">
+                          {{ (item.score * 100).toFixed(1) }}%
+                        </span>
+                      </div>
+                    </el-collapse-item>
+                  </el-collapse>
                 </div>
               </div>
             </div>
@@ -150,7 +172,6 @@
 </template>
 
 <script setup>
-// 保持原有的script部分完全不变
 import { ref, computed, onMounted, nextTick } from "vue";
 import { useAuthStore } from "../stores/auth";
 import { Plus } from "@element-plus/icons-vue";
@@ -216,91 +237,88 @@ const setTheme = (theme) => {
   storyForm.value.theme = theme;
 };
 
-  // 生成故事
-  const generateStory = async () => {
-    if (!storyForm.value.theme.trim()) {
-      ElMessage.warning("请输入故事主题");
-      return;
-    }
+// 生成故事
+const generateStory = async () => {
+  if (!storyForm.value.theme.trim()) {
+    ElMessage.warning("请输入故事主题");
+    return;
+  }
 
-    const userMsg = {
-      role: "user",
-      content: `请求生成故事：
+  const userMsg = {
+    role: "user",
+    content: `请求生成故事：
       年龄: ${storyForm.value.age}岁
       主题: ${storyForm.value.theme}
       要求: ${storyForm.value.requirements}
       长度: ${storyForm.value.length}字`,
+    timestamp: new Date().toLocaleTimeString(),
+  };
+
+  currentMessages.value.push(userMsg);
+  saveConversations();
+  scrollToBottom();
+
+  try {
+    isSending.value = true;
+
+    // 创建AI消息占位
+    const aiMsg = {
+      role: "ai",
+      content: "",
       timestamp: new Date().toLocaleTimeString(),
     };
-
-    currentMessages.value.push(userMsg);
+    currentMessages.value.push(aiMsg);
     saveConversations();
-    scrollToBottom();
 
-    try {
-      isSending.value = true;
-      
-      // 创建AI消息占位
-      const aiMsg = {
-        role: "ai",
-        content: "",
-        timestamp: new Date().toLocaleTimeString(),
-      };
-      currentMessages.value.push(aiMsg);
-      saveConversations();
-      
-      // 使用fetch API实现SSE (POST方法)
-      const response = await fetch(
-        "http://localhost:5000/api/generate_story",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${authStore.token}`,
-          },
-          body: JSON.stringify({
-            age: storyForm.value.age,
-            theme: storyForm.value.theme,
-            requirements: storyForm.value.requirements,
-            length: storyForm.value.length,
-          }),
-        }
-      );
+    // 使用fetch API实现SSE (POST方法)
+    const response = await fetch("http://localhost:5000/api/generate_story", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authStore.token}`,
+      },
+      body: JSON.stringify({
+        age: storyForm.value.age,
+        theme: storyForm.value.theme,
+        requirements: storyForm.value.requirements,
+        length: storyForm.value.length,
+      }),
+    });
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        isSending.value = false;
+        break;
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          isSending.value = false;
-          break;
-        }
+      const chunk = decoder.decode(value);
+      const lines = chunk.split("\n");
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n');
-        
-        for (const line of lines) {
-          if (line.startsWith('data:')) {
-            const data = JSON.parse(line.substring(5).trim());
-            if (data.text) {
-              aiMsg.content += data.text;
-              currentMessages.value = [...currentMessages.value];
-              saveConversations();
-              scrollToBottom();
-            }
+      for (const line of lines) {
+        if (line.startsWith("data:")) {
+          const data = JSON.parse(line.substring(5).trim());
+          if (data.text) {
+            aiMsg.content += data.text;
+            currentMessages.value = [...currentMessages.value];
+            saveConversations();
+            scrollToBottom();
           }
         }
       }
-    } catch (error) {
-      ElMessage.error("生成故事失败: " + error.message);
-      isSending.value = false;
     }
-  };
+  } catch (error) {
+    ElMessage.error("生成故事失败: " + error.message);
+    isSending.value = false;
+  }
+};
 
 // 情感分析
 const analyzeSentiment = async (text) => {
@@ -316,8 +334,14 @@ const analyzeSentiment = async (text) => {
       }
     );
 
-    const sentiment = response.data;
-    sentiment.recommendation = getRecommendation(sentiment.label);
+    const responseData = response.data;
+    const sentiment = {
+      label: responseData.primary_sentiment,
+      score: responseData.primary_score,
+      analysis: responseData.analysis,
+      recommendation: responseData.recommendation,
+      detail: responseData.detail,
+    };
 
     // 更新当前消息的情感分析结果
     const msgIndex = currentMessages.value.findIndex(
@@ -327,6 +351,8 @@ const analyzeSentiment = async (text) => {
       currentMessages.value[msgIndex].sentiment = sentiment;
       saveConversations();
     }
+
+    console.log("完整情感分析结果:", responseData);
   } catch (error) {
     ElMessage.error("情感分析失败: " + error.message);
   } finally {
@@ -352,16 +378,6 @@ const getSentimentTagType = (label) => {
     LABEL_2: "success",
   };
   return types[label] || "";
-};
-
-// 获取推荐内容
-const getRecommendation = (label) => {
-  const recommendations = {
-    LABEL_0: "检测到负面情绪，推荐阅读积极向上的故事",
-    LABEL_1: "故事情感中性，可以尝试更有趣的主题",
-    LABEL_2: "故事情感积极，继续保持哦！",
-  };
-  return recommendations[label] || "";
 };
 
 // 保存对话
@@ -449,7 +465,6 @@ onMounted(() => {
   background-color: rgba(255, 255, 255, 0.3);
 }
 
-/* 新的故事风格样式 */
 .story-container {
   padding: 30px;
   background-color: white;
@@ -460,38 +475,6 @@ onMounted(() => {
   background-position: center;
 }
 
-.story-header {
-  text-align: center;
-  margin-bottom: 40px;
-  padding: 20px;
-  background-color: rgba(255, 255, 255, 0.8);
-  border-radius: 15px;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-}
-
-.story-header h1 {
-  color: #6c5ce7;
-  font-size: 2.5rem;
-  margin-bottom: 15px;
-  font-family: "Comic Sans MS", cursive, sans-serif;
-}
-
-.story-categories h2,
-.story-categories h3 {
-  color: #333;
-  margin: 5px 0;
-}
-
-.story-categories h2 {
-  font-size: 1.8rem;
-  color: #e84393;
-}
-
-.story-categories h3 {
-  font-size: 1.4rem;
-  color: #0984e3;
-}
-
 .story-welcome {
   background-color: rgba(255, 255, 255, 0.85);
   padding: 30px;
@@ -500,55 +483,6 @@ onMounted(() => {
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
 }
 
-.story-welcome h2 {
-  color: #6c5ce7;
-  font-size: 2rem;
-  margin-bottom: 15px;
-  text-align: center;
-}
-
-.story-welcome p {
-  font-size: 1.1rem;
-  line-height: 1.6;
-  color: #333;
-  margin-bottom: 15px;
-}
-
-.popular-themes {
-  margin-top: 15px;
-}
-
-.popular-themes h4 {
-  font-size: 1rem;
-  color: #6c5ce7;
-  margin-bottom: 8px;
-}
-
-.popular-themes ul {
-  list-style-type: none;
-  padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.popular-themes li {
-  font-size: 0.9rem;
-  padding: 4px 10px;
-  margin: 0;
-  background-color: rgba(108, 92, 231, 0.1);
-  border-radius: 6px;
-  color: #6c5ce7;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.popular-themes li:hover {
-  background-color: rgba(108, 92, 231, 0.2);
-  transform: translateY(-2px);
-}
-
-/* 保留原有的消息样式 */
 .message-list {
   flex: 1;
   overflow-y: auto;
@@ -595,22 +529,11 @@ onMounted(() => {
   white-space: pre-line;
 }
 
-.sentiment-btn {
-  margin-left: 10px;
-  background: linear-gradient(135deg, #ff7675 0%, #fdcb6e 100%);
-  color: white;
-  border: none;
-}
-
 .sentiment-result {
   margin-top: 10px;
   padding: 10px;
   background-color: rgba(255, 255, 255, 0.8);
   border-radius: 8px;
-}
-
-.sentiment-result .el-tag {
-  margin-right: 10px;
 }
 
 .recommendation {
@@ -619,9 +542,25 @@ onMounted(() => {
   color: #666;
 }
 
-.user .message-body {
-  background: linear-gradient(135deg, #6c5ce7 0%, #a29bfe 100%);
-  color: white;
+.detail {
+  margin: 5px 0 0;
+  font-size: 0.9em;
+  color: #444;
+  white-space: pre-line;
+}
+
+.analysis-item {
+  display: flex;
+  align-items: center;
+  margin: 5px 0;
+  padding: 5px;
+  background-color: rgba(255, 255, 255, 0.5);
+  border-radius: 4px;
+}
+
+.analysis-score {
+  font-size: 0.9em;
+  color: #666;
 }
 
 .input-area {
@@ -629,6 +568,42 @@ onMounted(() => {
   background-color: rgba(255, 255, 255, 0.9);
   border-radius: 15px;
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+}
+
+.popular-themes ul {
+  list-style-type: none;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.popular-themes li {
+  font-size: 0.9rem;
+  padding: 4px 10px;
+  margin: 0;
+  background-color: rgba(108, 92, 231, 0.1);
+  border-radius: 6px;
+  color: #6c5ce7;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.popular-themes li:hover {
+  background-color: rgba(108, 92, 231, 0.2);
+  transform: translateY(-2px);
+}
+
+.user .message-body {
+  background: linear-gradient(135deg, #6c5ce7 0%, #a29bfe 100%);
+  color: white;
+}
+
+.sentiment-btn {
+  margin-left: 10px;
+  background: linear-gradient(135deg, #ff7675 0%, #fdcb6e 100%);
+  color: white;
+  border: none;
 }
 
 .send-btn {
