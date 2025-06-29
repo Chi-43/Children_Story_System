@@ -10,5 +10,7 @@ ai_chat_ui/node_modules/
 backend/.env
 test/
 
+
 # 教程目录
 LangChain-OpenTutorial-main/
+Rag/
