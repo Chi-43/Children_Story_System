@@ -65,6 +65,7 @@ except Exception as e:
     print(f"初始化情感分析模型失败: {str(e)}")
     sentiment_analyzer = None
 
+
 # 初始化数据库
 def init_db():
     conn = sqlite3.connect('database.db')
