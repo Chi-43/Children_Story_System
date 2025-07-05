@@ -1,16 +1,16 @@
 from flask import Flask, request, jsonify, Response
 import json
 from flask_cors import CORS
-import jwt
+import jwt as pyjwt
 import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
+import sqlite3
 import os
 from dotenv import load_dotenv
 import requests
-from mysql_db import get_connection
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
-from langchain_community.chat_models import ChatCoze
+from langchain_community.llms import Tongyi
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import TextLoader
 from transformers import pipeline
@@ -21,21 +21,33 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET') or 'your-secret-key'
-app.config['COZE_API_KEY'] = os.getenv('COZE_API_KEY')
+app.config['TONGYI_API_KEY'] = os.getenv('DASHSCOPE_API_KEY')
 
 # 初始化LangChain组件
-llm = ChatCoze(
-    coze_api_key=app.config['COZE_API_KEY'],
-    model="coze-chat-pro",
+llm = Tongyi(
+    dashscope_api_key=app.config['TONGYI_API_KEY'],
+    model_name="qwen-turbo",
     temperature=0.7
 )
 
 # 故事生成模板
-story_template = """你是一个儿童故事创作专家，请根据以下要求创作一个适合{age}岁儿童的故事：
-主题：{theme}
-故事要求：{requirements}
-故事长度：约{length}字
-请创作一个富有教育意义、积极向上的故事，避免任何暴力或不适宜内容。"""
+story_template = """#角色
+-你是一个儿童心理大师兼职儿童故事专家，懂得很多儿童心理知识，很会做心理分析，能根据儿童的描述来评估他们的心理状态，并且能够在对儿童完成心理分析后给他们讲述故事。
+-你的主体是讲述儿童故事，情绪分析只是你为讲故事而做的必要准备
+
+#技能
+-你会接收用户的对话
+-你会根据儿童对话中的要求来为他们讲故事
+-你会根据用户对话或者对故事评价中的语气及描述来评判用户的心理情绪并总结后输出
+-你会根据之前对用户的心理情绪评估来为他们讲述合适的故事
+
+
+#限制
+-不得违反事实或者造假
+-遵守版权和知识产权法规
+-你的用户对象是12岁以下的儿童，请不要输出儿童不宜的内容。
+用户输入：{message}
+"""
 
 story_prompt = PromptTemplate(
     input_variables=["age", "theme", "requirements", "length"],
@@ -65,9 +77,34 @@ except Exception as e:
     print(f"初始化情感分析模型失败: {str(e)}")
     sentiment_analyzer = None
 
+
 # 初始化数据库
-from mysql_db import init_db
+def init_db():
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS users
+                 (
+                     id
+                     INTEGER
+                     PRIMARY
+                     KEY
+                     AUTOINCREMENT,
+                     username
+                     TEXT
+                     UNIQUE
+                     NOT
+                     NULL,
+                     password
+                     TEXT
+                     NOT
+                     NULL
+                 )''')
+    conn.commit()
+    conn.close()
+
+
 init_db()
+
 
 # JWT工具函数
 def create_token(user_id):
@@ -75,7 +112,8 @@ def create_token(user_id):
         'user_id': user_id,
         'exp': datetime.datetime.utcnow() + datetime.timedelta(days=1)
     }
-    return jwt.encode(payload, app.config['SECRET_KEY'], algorithm='HS256')
+    return pyjwt.encode(payload, app.config['SECRET_KEY'], algorithm='HS256')
+
 
 # 用户注册
 @app.route('/api/register', methods=['POST'])
@@ -83,39 +121,39 @@ def register():
     data = request.get_json()
     username = data.get('username')
     password = data.get('password')
-    
+
     if not username or not password:
         return jsonify({'error': '用户名和密码不能为空'}), 400
-    
+
     hashed_password = generate_password_hash(password)
-    
+
     try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM users WHERE username=%s", (username,))
-        if cursor.fetchone():
-            cursor.close()
-            conn.close()
+        conn = sqlite3.connect('database.db')
+        c = conn.cursor()
+        c.execute("SELECT id FROM users WHERE username=?", (username,))
+        if c.fetchone():
             return jsonify({
                 'error': 'REGISTER_ERROR',
                 'message': '用户名已存在',
                 'action': 'redirect_to_login'
             }), 400
-            
-        cursor.execute("INSERT INTO users (username, password) VALUES (%s, %s)", 
-                 (username, hashed_password))
+
+        c.execute("INSERT INTO users (username, password) VALUES (?, ?)",
+                  (username, hashed_password))
         conn.commit()
-        user_id = cursor.lastrowid
-        cursor.close()
+        user_id = c.lastrowid
         conn.close()
-        
+        print(f"成功注册用户: {username}, ID: {user_id}")
+
         token = create_token(user_id)
         return jsonify({'token': token, 'user_id': user_id}), 201
-    except Exception as e:
+    except sqlite3.IntegrityError:
         return jsonify({
             'error': 'REGISTER_ERROR',
-            'message': str(e)
-        }), 500
+            'message': '用户名已存在',
+            'action': 'redirect_to_login'
+        }), 400
+
 
 # 用户登录
 @app.route('/api/login', methods=['POST'])
@@ -123,336 +161,270 @@ def login():
     data = request.get_json()
     username = data.get('username')
     password = data.get('password')
-    
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, password FROM users WHERE username=%s", (username,))
-        user = cursor.fetchone()
-        cursor.close()
-        conn.close()
-        
-        if not user or not check_password_hash(user[1], password):
-            return jsonify({
-                'error': 'LOGIN_ERROR', 
-                'message': '用户名或密码错误'
-            }), 401
-        
-        token = create_token(user[0])
-        return jsonify({'token': token, 'user_id': user[0]})
-    except Exception as e:
+
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    c.execute("SELECT id, password FROM users WHERE username=?", (username,))
+    user = c.fetchone()
+    conn.close()
+
+    if not user or not check_password_hash(user[1], password):
         return jsonify({
             'error': 'LOGIN_ERROR',
-            'message': str(e)
-        }), 500
+            'message': '用户名或密码错误'
+        }), 401
 
-# 对话历史API
-@app.route('/api/conversations', methods=['GET'])
-def get_conversations():
-    auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith('Bearer '):
-        return jsonify({'error': '未提供有效的认证token'}), 401
-    
-    token = auth_header.split(' ')[1]
-    
-    try:
-        payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
-        user_id = payload['user_id']
-        
-        conn = get_connection()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT id, title, created_at 
-            FROM conversations 
-            WHERE user_id=%s 
-            ORDER BY created_at DESC
-        """, (user_id,))
-        conversations = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        
-        return jsonify(conversations)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    token = create_token(user[0])
+    return jsonify({'token': token, 'user_id': user[0]})
 
-# 获取对话详情
-@app.route('/api/conversations/<int:conversation_id>', methods=['GET'])
-def get_conversation(conversation_id):
-    auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith('Bearer '):
-        return jsonify({'error': '未提供有效的认证token'}), 401
-    
-    token = auth_header.split(' ')[1]
-    
-    try:
-        payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
-        user_id = payload['user_id']
-        
-        conn = get_connection()
-        cursor = conn.cursor(dictionary=True)
-        
-        # 验证对话属于当前用户
-        cursor.execute("""
-            SELECT id FROM conversations 
-            WHERE id=%s AND user_id=%s
-        """, (conversation_id, user_id))
-        if not cursor.fetchone():
-            cursor.close()
-            conn.close()
-            return jsonify({'error': '对话不存在或无权访问'}), 404
-            
-        # 获取对话消息
-        cursor.execute("""
-            SELECT id, role, content, sentiment, created_at
-            FROM messages
-            WHERE conversation_id=%s
-            ORDER BY created_at ASC
-        """, (conversation_id,))
-        messages = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        
-        return jsonify(messages)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
-# 创建新对话
-@app.route('/api/conversations', methods=['POST'])
-def create_conversation():
-    auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith('Bearer '):
-        return jsonify({'error': '未提供有效的认证token'}), 401
-    
-    token = auth_header.split(' ')[1]
-    data = request.get_json()
-    
-    if not data or 'title' not in data:
-        return jsonify({'error': '缺少对话标题'}), 400
-    
-    try:
-        payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
-        user_id = payload['user_id']
-        
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO conversations (user_id, title)
-            VALUES (%s, %s)
-        """, (user_id, data['title']))
-        conn.commit()
-        conversation_id = cursor.lastrowid
-        cursor.close()
-        conn.close()
-        
-        return jsonify({
-            'id': conversation_id,
-            'title': data['title'],
-            'created_at': datetime.datetime.now().isoformat()
-        }), 201
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-# 保存消息
-@app.route('/api/messages', methods=['POST'])
-def save_message():
-    auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith('Bearer '):
-        return jsonify({'error': '未提供有效的认证token'}), 401
-    
-    token = auth_header.split(' ')[1]
-    data = request.get_json()
-    
-    required_fields = ['conversation_id', 'role', 'content']
-    if not all(field in data for field in required_fields):
-        return jsonify({'error': '缺少必要参数'}), 400
-    
-    try:
-        payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
-        user_id = payload['user_id']
-        
-        conn = get_connection()
-        cursor = conn.cursor()
-        
-        # 验证对话属于当前用户
-        cursor.execute("""
-            SELECT id FROM conversations 
-            WHERE id=%s AND user_id=%s
-        """, (data['conversation_id'], user_id))
-        if not cursor.fetchone():
-            cursor.close()
-            conn.close()
-            return jsonify({'error': '对话不存在或无权访问'}), 404
-            
-        # 保存消息
-        cursor.execute("""
-            INSERT INTO messages (conversation_id, role, content, sentiment)
-            VALUES (%s, %s, %s, %s)
-        """, (
-            data['conversation_id'],
-            data['role'],
-            data['content'],
-            json.dumps(data.get('sentiment')) if 'sentiment' in data else None
-        ))
-        conn.commit()
-        message_id = cursor.lastrowid
-        cursor.close()
-        conn.close()
-        
-        return jsonify({
-            'id': message_id,
-            'conversation_id': data['conversation_id'],
-            'created_at': datetime.datetime.now().isoformat()
-        }), 201
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-# 删除对话(增强版)
-@app.route('/api/conversations/<int:conversation_id>', methods=['DELETE'])
-def delete_conversation(conversation_id):
-    auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith('Bearer '):
-        return jsonify({'error': '未提供有效的认证token'}), 401
-    
-    token = auth_header.split(' ')[1]
-    
-    try:
-        payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
-        user_id = payload['user_id']
-        
-        conn = get_connection()
-        cursor = conn.cursor()
-        
-        # 验证对话是否存在且属于当前用户
-        cursor.execute("""
-            SELECT id FROM conversations 
-            WHERE id=%s AND user_id=%s
-        """, (conversation_id, user_id))
-        conversation = cursor.fetchone()
-        
-        if not conversation:
-            cursor.close()
-            conn.close()
-            return jsonify({
-                'success': False,
-                'error': '对话不存在或无权访问',
-                'conversation_id': conversation_id
-            }), 404
-            
-        # 先删除关联消息(确保外键约束)
-        cursor.execute("DELETE FROM messages WHERE conversation_id=%s", (conversation_id,))
-        
-        # 再删除对话
-        cursor.execute("DELETE FROM conversations WHERE id=%s", (conversation_id,))
-        
-        # 验证删除是否成功
-        cursor.execute("SELECT id FROM conversations WHERE id=%s", (conversation_id,))
-        if cursor.fetchone():
-            conn.rollback()
-            cursor.close()
-            conn.close()
-            return jsonify({
-                'success': False,
-                'error': '删除对话失败',
-                'conversation_id': conversation_id
-            }), 500
-            
-        conn.commit()
-        cursor.close()
-        conn.close()
-        
-        return jsonify({
-            'success': True,
-            'message': '对话删除成功',
-            'conversation_id': conversation_id
-        }), 200
-    except Exception as e:
-        if 'conn' in locals():
-            conn.rollback()
-            cursor.close()
-            conn.close()
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'conversation_id': conversation_id
-        }), 500
-
-# 问答API
-@app.route('/api/ask_question', methods=['POST'])
+# 调用通义千问API
+@app.route('/api/ask', methods=['POST'])
 def ask_question():
-    data = request.get_json()
-    question = data.get('question')
-    conversation_id = data.get('conversation_id')
-    
-    # 这里添加问答逻辑
-    answer = f"这是关于'{question}'的回答"
-    
-    return jsonify({
-        'success': True,
-        'answer': answer,
-        'conversation_id': conversation_id
-    })
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith('Bearer '):
+        return jsonify({'error': '未提供有效的认证token'}), 401
 
-# 故事生成API (SSE流式响应)
-@app.route('/api/generate_story', methods=['GET'])
-def generate_story():
-    age = request.args.get('age', type=int)
-    theme = request.args.get('theme', '')
-    requirements = request.args.get('requirements', '')
-    length = request.args.get('length', type=int)
-    
-    def generate():
-        try:
-            if not app.config['COZE_API_KEY']:
-                raise ValueError("未配置Coze API密钥")
-                
-            # 使用Coze API流式生成
-            response = llm.stream(story_template.format(
-                age=age,
-                theme=theme,
-                requirements=requirements,
-                length=length
-            ))
-            for chunk in response:
-                yield f"data: {json.dumps({'text': chunk.content})}\n\n"
-                
-        except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
-    
-    return Response(generate(), mimetype='text/event-stream')
+    token = auth_header.split(' ')[1]
 
-# 加载故事API
-@app.route('/api/load_stories', methods=['GET'])
-def load_stories():
     try:
-        conn = get_connection()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM stories ORDER BY created_at DESC")
-        stories = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        return jsonify(stories)
-    except Exception as e:
+        payload = pyjwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+    except pyjwt.ExpiredSignatureError:
+        return jsonify({'error': 'token已过期'}), 401
+    except pyjwt.InvalidTokenError:
+        return jsonify({'error': '无效的token'}), 401
+
+    data = request.get_json()
+    if not data or 'question' not in data:
+        return jsonify({'error': '缺少问题参数'}), 400
+
+    question = data['question']
+
+    try:
+        url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
+        headers = {
+            "Authorization": f"Bearer {app.config['TONGYI_API_KEY']}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "qwen-turbo",
+            "input": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": question
+                    }
+                ]
+            }
+        }
+
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        result = response.json()
+        if 'output' not in result or 'text' not in result['output']:
+            raise ValueError('无效的API响应格式')
+
+        return jsonify({
+            'answer': result['output']['text'],
+            'request_id': result.get('request_id', '')
+        })
+
+    except requests.exceptions.RequestException as e:
+        app.logger.error(f'调用通义千问API失败: {str(e)}')
+        return jsonify({'error': f'调用AI服务失败: {str(e)}'}), 500
+    except ValueError as e:
+        app.logger.error(f'API响应解析失败: {str(e)}')
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/generate_story', methods=['POST'])
+def generate_story():
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith('Bearer '):
+        return jsonify({'error': '未提供有效的认证token'}), 401
+
+    token = auth_header.split(' ')[1]
+
+    try:
+        payload = pyjwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+    except pyjwt.ExpiredSignatureError:
+        return jsonify({'error': 'token已过期'}), 401
+    except pyjwt.InvalidTokenError:
+        return jsonify({'error': '无效的token'}), 401
+
+    data = request.get_json()
+    if not data or 'prompt' not in data:
+        return jsonify({'error': '缺少prompt参数'}), 400
+
+    try:
+        print(f"调用通义千问API生成故事(流式)，用户输入: {data['prompt']}")
+
+        url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
+        headers = {
+            "Authorization": f"Bearer {app.config['TONGYI_API_KEY']}",
+            "Content-Type": "application/json",
+            "X-DashScope-SSE": "enable"
+        }
+
+        # 使用模板格式化用户输入
+        prompt_content = story_template.format(message=data['prompt'])
+
+        payload = {
+            "model": "qwen-turbo",
+            "input": {
+                "messages": [{
+                    "role": "user",
+                    "content": prompt_content
+                }]
+            },
+            "parameters": {
+                "incremental_output": True,
+                "temperature": 0.8,
+                "top_p": 0.9
+            }
+        }
+
+        def generate():
+            try:
+                with requests.post(url, json=payload, headers=headers, stream=True, timeout=30) as response:
+                    response.raise_for_status()
+                    for line in response.iter_lines():
+                        if line:
+                            decoded_line = line.decode('utf-8')
+                            if decoded_line.startswith('data:'):
+                                try:
+                                    data_chunk = json.loads(decoded_line[5:])
+                                    if 'output' in data_chunk and 'text' in data_chunk['output']:
+                                        yield f"data: {json.dumps({'text': data_chunk['output']['text']})}\n\n"
+                                except json.JSONDecodeError as e:
+                                    app.logger.error(f"JSON解析错误: {str(e)}")
+                                    continue
+            except Exception as e:
+                app.logger.error(f"流式请求过程中出错: {str(e)}")
+                yield f"data: {json.dumps({'error': '故事生成中断'})}\n\n"
+
+        return Response(generate(), mimetype='text/event-stream')
+
+    except Exception as e:
+        print(f"故事生成失败，详细错误: {str(e)}")
+        app.logger.error(f"故事生成失败: {str(e)}")
+        return jsonify({'error': f'故事生成失败: {str(e)}'}), 500
+
+
+# 加载故事素材
+@app.route('/api/load_stories', methods=['POST'])
+def load_stories():
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith('Bearer '):
+        return jsonify({'error': '未提供有效的认证token'}), 401
+
+    token = auth_header.split(' ')[1]
+
+    try:
+        payload = pyjwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+    except pyjwt.ExpiredSignatureError:
+        return jsonify({'error': 'token已过期'}), 401
+    except pyjwt.InvalidTokenError:
+        return jsonify({'error': '无效的token'}), 401
+
+    if 'file_path' not in request.json:
+        return jsonify({'error': '缺少文件路径参数'}), 400
+
+    try:
+        loader = TextLoader(request.json['file_path'])
+        documents = loader.load()
+        chunks = text_splitter.split_documents(documents)
+        return jsonify({
+            'chunks': [chunk.page_content for chunk in chunks],
+            'count': len(chunks)
+        })
+    except Exception as e:
+        return jsonify({'error': f'加载故事失败: {str(e)}'}), 500
+
 
 # 情感分析API
 @app.route('/api/analyze_sentiment', methods=['POST'])
 def analyze_sentiment():
-    if not sentiment_analyzer:
-        return jsonify({'error': '情感分析模型未初始化'}), 500
-        
-    text = request.json.get('text')
-    if not text:
-        return jsonify({'error': '缺少文本内容'}), 400
-        
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith('Bearer '):
+        return jsonify({'error': '未提供有效的认证token'}), 401
+
+    token = auth_header.split(' ')[1]
+
     try:
-        result = sentiment_analyzer(text)
+        payload = pyjwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+    except pyjwt.ExpiredSignatureError:
+        return jsonify({'error': 'token已过期'}), 401
+    except pyjwt.InvalidTokenError:
+        return jsonify({'error': '无效的token'}), 401
+
+    if 'text' not in request.json:
+        return jsonify({'error': '缺少文本参数'}), 400
+
+    if not sentiment_analyzer:
+        return jsonify({'error': '情感分析服务暂不可用，请稍后再试'}), 503
+
+    try:
+        text = request.json['text']
+        print(f"开始情感分析: {text[:50]}...")
+
+        # 文本分块处理(每块500字符)
+        chunk_size = 500
+        chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+
+        results = []
+        for chunk in chunks:
+            try:
+                print(f"正在分析文本块: {chunk[:50]}...")
+                chunk_result = sentiment_analyzer(chunk)
+                print(f"原始分析结果: {chunk_result}")
+
+                # 处理返回结果
+                if isinstance(chunk_result, list):
+                    if len(chunk_result) > 0:
+                        if isinstance(chunk_result[0], dict) and 'label' in chunk_result[0]:
+                            results.extend(chunk_result)
+                        elif isinstance(chunk_result[0], list):
+                            results.extend([item for sublist in chunk_result for item in sublist])
+
+            except Exception as e:
+                print(f"分析文本块时出错: {str(e)}")
+                continue
+
+        if not results:
+            raise ValueError("情感分析未返回有效结果")
+
+        print(f"最终结果集: {results}")
+
+        # 计算整体情感
+        avg_scores = {}
+        label_mapping = {'POS': 'POSITIVE', 'NEU': 'NEUTRAL', 'NEG': 'NEGATIVE'}
+        for orig_label, mapped_label in label_mapping.items():
+            scores = [r['score'] for r in results if r.get('label') == orig_label]
+            avg_scores[mapped_label] = sum(scores) / len(scores) if scores else 0
+
+        primary_sentiment = max(avg_scores, key=avg_scores.get)
+        primary_score = avg_scores[primary_sentiment]
+
+        # 生成详细建议
+        recommendations = {
+            'POSITIVE': '内容积极向上，适合继续阅读类似故事',
+            'NEUTRAL': '内容情感中性，可以尝试更有趣的主题',
+            'NEGATIVE': '检测到负面情绪，建议阅读积极内容调节心情'
+        }
+
         return jsonify({
-            'sentiment': result[0]['label'],
-            'score': result[0]['score']
+            'analysis': results,
+            'primary_sentiment': primary_sentiment,
+            'primary_score': primary_score,
+            'recommendation': recommendations[primary_sentiment],
+            'detail': f"分析了{len(chunks)}个文本块，综合评估情感为{primary_sentiment}"
         })
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f"情感分析处理失败: {str(e)}")
+        return jsonify({'error': f'情感分析失败: {str(e)}'}), 500
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000, threaded=True)
+    app.run(debug=True, port=5000)
