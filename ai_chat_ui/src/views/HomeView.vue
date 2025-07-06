@@ -1,19 +1,18 @@
 <template>
   <div class="home-container">
     <el-container>
-      <!-- 侧边栏 - 保持原有功能不变 -->
+      <!-- 侧边栏 -->
       <el-aside width="250px" class="sidebar">
         <div class="user-info">
           <el-avatar :size="50" :src="userAvatar" />
           <span class="username">{{ authStore.user?.username }}</span>
-          <el-button type="text" @click="authStore.logout" class="logout-btn">
-            退出登录
-          </el-button>
+          <el-button type="text" @click="authStore.logout" class="logout-btn"
+            >退出登录</el-button
+          >
         </div>
 
         <el-button type="primary" @click="newConversation" class="new-chat-btn">
-          <el-icon><plus /></el-icon>
-          新对话
+          <el-icon><Plus /></el-icon>新对话
         </el-button>
 
         <el-menu :default-active="activeConversation" class="conversation-list">
@@ -23,23 +22,52 @@
             :index="String(index)"
             @click="selectConversation(index)"
           >
-            <span>{{ conv.title }}</span>
+            <div
+              style="
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                width: 100%;
+              "
+            >
+              <span>{{ conv.title }}</span>
+              <div style="display: flex; gap: 5px">
+                <el-button
+                  type="text"
+                  :icon="Edit"
+                  @click.stop="renameConversation(index)"
+                  style="color: white"
+                  circle
+                  size="small"
+                />
+                <el-button
+                  type="text"
+                  :icon="Delete"
+                  @click.stop="deleteConversation(index)"
+                  style="color: white"
+                  circle
+                  size="small"
+                />
+              </div>
+            </div>
           </el-menu-item>
         </el-menu>
       </el-aside>
 
-      <!-- 主内容区 - 修改为故事风格 -->
+      <!-- 主内容区 -->
       <el-main class="story-container">
         <div class="story-welcome">
-          <h2>儿童故事乐园</h2>
-          <p>
-            <strong
-              >你好！我是故事精灵，可以为你创作有趣的人类故事并进行情感分析。你想听什么故事呢？</strong
-            >
-          </p>
+          <h2>童话故事王国</h2>
+          <p><strong>你好！我是故事精灵，可以为你讲故事并分析情感~</strong></p>
+          <el-button
+            type="primary"
+            @click="router.push('/sentiment-analysis')"
+            class="sentiment-btn"
+          >
+            <el-icon><DataAnalysis /></el-icon>查看情感分析
+          </el-button>
         </div>
 
-        <!-- 保留原有的消息列表，但初始隐藏 -->
         <div
           class="message-list"
           ref="messageList"
@@ -60,110 +88,56 @@
               <div class="message-text">
                 <div class="message-meta">
                   <span class="message-role">{{
-                    msg.role === "user" ? "你" : "AI助手"
+                    msg.role === "user" ? "你" : "故事精灵"
                   }}</span>
                   <span class="message-time">{{ msg.timestamp }}</span>
-                  <el-button
-                    v-if="msg.role === 'ai' && msg.content.length > 10"
-                    size="small"
-                    @click="analyzeSentiment(msg.content)"
-                    class="sentiment-btn"
-                  >
-                    情感分析
-                  </el-button>
                 </div>
                 <div class="message-body">{{ msg.content }}</div>
-                <div v-if="msg.sentiment" class="sentiment-result">
-                  <el-tag :type="getSentimentTagType(msg.sentiment.label)">
-                    {{ getSentimentLabel(msg.sentiment.label) }}
-                    ({{ (msg.sentiment.score * 100).toFixed(1) }}%)
-                  </el-tag>
-                  <p v-if="msg.sentiment.recommendation" class="recommendation">
-                    {{ msg.sentiment.recommendation }}
-                  </p>
-                  <p v-if="msg.sentiment.detail" class="detail">
-                    {{ msg.sentiment.detail }}
-                  </p>
-                  <el-collapse>
-                    <el-collapse-item title="查看详细分析">
-                      <div
-                        v-for="(item, index) in msg.sentiment.analysis"
-                        :key="index"
-                        class="analysis-item"
-                      >
-                        <el-tag
-                          :type="getSentimentTagType(item.label)"
-                          size="small"
-                        >
-                          {{ getSentimentLabel(item.label) }}
-                        </el-tag>
-                        <span class="analysis-score">
-                          {{ (item.score * 100).toFixed(1) }}%
-                        </span>
-                      </div>
-                    </el-collapse-item>
-                  </el-collapse>
-                </div>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- 故事生成表单 -->
+        <!-- 输入区域 - 重点美化部分 -->
         <div class="input-area">
-          <el-form :model="storyForm" label-width="80px">
-            <el-form-item label="儿童年龄">
-              <el-input-number v-model="storyForm.age" :min="3" :max="12" />
-            </el-form-item>
-            <el-form-item label="故事主题">
-              <el-input
-                v-model="storyForm.theme"
-                placeholder="如：勇敢、友谊等"
-              />
-            </el-form-item>
-            <el-form-item label="特殊要求">
-              <el-input
-                v-model="storyForm.requirements"
-                type="textarea"
-                placeholder="如：主角是小狗、要有魔法元素等"
-              />
-            </el-form-item>
-            <el-form-item label="故事长度">
-              <el-select v-model="storyForm.length" placeholder="请选择">
-                <el-option label="短篇(约200字)" value="200" />
-                <el-option label="中篇(约500字)" value="500" />
-                <el-option label="长篇(约1000字)" value="1000" />
-              </el-select>
-            </el-form-item>
-            <el-form-item>
-              <el-button
-                type="primary"
-                @click="generateStory"
-                :loading="isSending"
-                class="send-btn"
-              >
-                生成故事
-              </el-button>
-            </el-form-item>
-          </el-form>
-
-          <!-- 热门主题推荐 -->
+          <!-- 热门童话主题区域 -->
           <div class="popular-themes">
-            <h4>热门故事主题：</h4>
-            <ul>
-              <li @click="setTheme('勇敢的小兔子')">
-                <strong>勇敢的小兔子</strong>
-              </li>
-              <li @click="setTheme('友谊的力量')">
-                <strong>友谊的力量</strong>
-              </li>
-              <li @click="setTheme('森林冒险')">
-                <strong>森林冒险</strong>
-              </li>
-              <li @click="setTheme('超级英雄')">
-                <strong>超级英雄</strong>
-              </li>
-            </ul>
+            <h3>
+              <el-icon><StarFilled /></el-icon> 热门童话主题
+            </h3>
+            <div class="theme-tags">
+              <el-tag
+                v-for="(theme, index) in popularThemes"
+                :key="index"
+                @click="selectTheme(theme)"
+                class="theme-tag"
+                effect="light"
+              >
+                {{ theme }}
+              </el-tag>
+            </div>
+          </div>
+
+          <div class="input-container">
+            <el-input
+              v-model="storyInput"
+              placeholder="请输入你想听的故事内容..."
+              @keyup.enter="sendStoryInput"
+              clearable
+              class="story-input"
+            >
+              <template #prefix>
+                <el-icon><MagicStick /></el-icon>
+              </template>
+            </el-input>
+            <el-button
+              type="primary"
+              @click="sendStoryInput"
+              :loading="isSending"
+              class="send-btn"
+            >
+              <el-icon><Promotion /></el-icon>发送
+            </el-button>
           </div>
         </div>
       </el-main>
@@ -173,26 +147,45 @@
 
 <script setup>
 import { ref, computed, onMounted, nextTick } from "vue";
+import { useRouter } from "vue-router";
 import { useAuthStore } from "../stores/auth";
-import { Plus } from "@element-plus/icons-vue";
 import axios from "axios";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
+import {
+  Plus,
+  Delete,
+  Edit,
+  DataAnalysis,
+  StarFilled,
+  MagicStick,
+  Promotion,
+} from "@element-plus/icons-vue"; // 使用存在的图标
 
+const router = useRouter();
 const authStore = useAuthStore();
 
-const storyForm = ref({
-  age: 6,
-  theme: "",
-  requirements: "",
-  length: "500",
-});
-
+const storyInput = ref("");
 const isSending = ref(false);
+const isAnalyzing = ref(false);
+
 const conversations = ref([]);
 const currentMessages = ref([]);
 const activeConversation = ref(0);
 const messageList = ref(null);
-const isAnalyzing = ref(false);
+
+// 热门童话主题
+const popularThemes = ref([
+  "小红帽",
+  "三只小猪",
+  "灰姑娘",
+  "白雪公主",
+  "青蛙王子",
+  "睡美人",
+  "阿拉丁神灯",
+  "小美人鱼",
+  "丑小鸭",
+  "皇帝的新装",
+]);
 
 const userAvatar = computed(
   () =>
@@ -200,7 +193,6 @@ const userAvatar = computed(
 );
 const botAvatar = "https://api.dicebear.com/7.x/bottts/svg?seed=AI";
 
-// 初始化对话
 const initConversations = () => {
   const saved = localStorage.getItem(`conversations_${authStore.user?.id}`);
   if (saved) {
@@ -213,7 +205,6 @@ const initConversations = () => {
   }
 };
 
-// 创建新对话
 const newConversation = () => {
   const newConv = {
     title: `新对话 ${conversations.value.length + 1}`,
@@ -226,42 +217,71 @@ const newConversation = () => {
   saveConversations();
 };
 
-// 选择对话
 const selectConversation = (index) => {
   activeConversation.value = index;
   currentMessages.value = conversations.value[index].messages;
 };
 
-// 设置主题
-const setTheme = (theme) => {
-  storyForm.value.theme = theme;
+const renameConversation = (index) => {
+  ElMessageBox.prompt("请输入新的对话名称", "重命名对话", {
+    confirmButtonText: "确定",
+    cancelButtonText: "取消",
+    inputValue: conversations.value[index].title,
+    inputValidator: (val) => !!val.trim(),
+    inputErrorMessage: "名称不能为空",
+  })
+    .then(({ value }) => {
+      conversations.value[index].title = value.trim();
+      saveConversations();
+      ElMessage.success("重命名成功");
+    })
+    .catch(() => {});
 };
 
-// 生成故事
-const generateStory = async () => {
-  if (!storyForm.value.theme.trim()) {
-    ElMessage.warning("请输入故事主题");
+const deleteConversation = (index) => {
+  ElMessageBox.confirm("确定删除该对话？", "提示", {
+    confirmButtonText: "确定",
+    cancelButtonText: "取消",
+    type: "warning",
+  })
+    .then(() => {
+      conversations.value.splice(index, 1);
+      if (index === activeConversation.value) {
+        currentMessages.value = conversations.value[0]?.messages || [];
+        activeConversation.value = 0;
+      }
+      saveConversations();
+      ElMessage.success("删除成功");
+    })
+    .catch(() => {});
+};
+
+// 选择热门主题
+const selectTheme = (theme) => {
+  storyInput.value = `请讲一个关于${theme}的童话故事`;
+};
+
+const sendStoryInput = async () => {
+  if (!storyInput.value.trim()) {
+    ElMessage.warning("请输入内容");
     return;
   }
 
+  const content = storyInput.value.trim();
+
   const userMsg = {
     role: "user",
-    content: `请求生成故事：
-      年龄: ${storyForm.value.age}岁
-      主题: ${storyForm.value.theme}
-      要求: ${storyForm.value.requirements}
-      长度: ${storyForm.value.length}字`,
+    content,
     timestamp: new Date().toLocaleTimeString(),
   };
-
   currentMessages.value.push(userMsg);
   saveConversations();
   scrollToBottom();
+  storyInput.value = "";
 
   try {
     isSending.value = true;
 
-    // 创建AI消息占位
     const aiMsg = {
       role: "ai",
       content: "",
@@ -270,24 +290,16 @@ const generateStory = async () => {
     currentMessages.value.push(aiMsg);
     saveConversations();
 
-    // 使用fetch API实现SSE (POST方法)
     const response = await fetch("http://localhost:5000/api/generate_story", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${authStore.token}`,
       },
-      body: JSON.stringify({
-        age: storyForm.value.age,
-        theme: storyForm.value.theme,
-        requirements: storyForm.value.requirements,
-        length: storyForm.value.length,
-      }),
+      body: JSON.stringify({ prompt: content }),
     });
 
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -301,7 +313,6 @@ const generateStory = async () => {
 
       const chunk = decoder.decode(value);
       const lines = chunk.split("\n");
-
       for (const line of lines) {
         if (line.startsWith("data:")) {
           const data = JSON.parse(line.substring(5).trim());
@@ -315,72 +326,11 @@ const generateStory = async () => {
       }
     }
   } catch (error) {
-    ElMessage.error("生成故事失败: " + error.message);
+    ElMessage.error("生成失败: " + error.message);
     isSending.value = false;
   }
 };
 
-// 情感分析
-const analyzeSentiment = async (text) => {
-  try {
-    isAnalyzing.value = true;
-    const response = await axios.post(
-      "http://localhost:5000/api/analyze_sentiment",
-      { text },
-      {
-        headers: {
-          Authorization: `Bearer ${authStore.token}`,
-        },
-      }
-    );
-
-    const responseData = response.data;
-    const sentiment = {
-      label: responseData.primary_sentiment,
-      score: responseData.primary_score,
-      analysis: responseData.analysis,
-      recommendation: responseData.recommendation,
-      detail: responseData.detail,
-    };
-
-    // 更新当前消息的情感分析结果
-    const msgIndex = currentMessages.value.findIndex(
-      (msg) => msg.content === text
-    );
-    if (msgIndex !== -1) {
-      currentMessages.value[msgIndex].sentiment = sentiment;
-      saveConversations();
-    }
-
-    console.log("完整情感分析结果:", responseData);
-  } catch (error) {
-    ElMessage.error("情感分析失败: " + error.message);
-  } finally {
-    isAnalyzing.value = false;
-  }
-};
-
-// 获取情感标签显示文本
-const getSentimentLabel = (label) => {
-  const labels = {
-    LABEL_0: "负面",
-    LABEL_1: "中性",
-    LABEL_2: "正面",
-  };
-  return labels[label] || label;
-};
-
-// 获取情感标签类型
-const getSentimentTagType = (label) => {
-  const types = {
-    LABEL_0: "danger",
-    LABEL_1: "info",
-    LABEL_2: "success",
-  };
-  return types[label] || "";
-};
-
-// 保存对话
 const saveConversations = () => {
   conversations.value[activeConversation.value].messages =
     currentMessages.value;
@@ -390,7 +340,6 @@ const saveConversations = () => {
   );
 };
 
-// 滚动到底部
 const scrollToBottom = () => {
   nextTick(() => {
     if (messageList.value) {
@@ -459,6 +408,11 @@ onMounted(() => {
   color: white;
   margin-bottom: 5px;
   border-radius: 8px;
+  transition: all 0.3s;
+}
+
+.conversation-list :deep(.el-menu-item:hover) {
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .conversation-list :deep(.el-menu-item.is-active) {
@@ -470,36 +424,91 @@ onMounted(() => {
   background-color: white;
   height: 100vh;
   overflow-y: auto;
+  background: linear-gradient(to bottom, #e6f7ff, #f0f9ff);
   background-image: url("https://img.freepik.com/free-vector/hand-painted-watercolor-pastel-sky-background_23-2148902771.jpg");
   background-size: cover;
   background-position: center;
+  position: relative;
+}
+
+.story-container::before {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 120px;
+  background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 320"><path fill="%23ffffff" fill-opacity="0.6" d="M0,192L48,197.3C96,203,192,213,288,229.3C384,245,480,267,576,261.3C672,256,768,224,864,197.3C960,171,1056,149,1152,160C1248,171,1344,213,1392,234.7L1440,256L1440,320L1392,320C1344,320,1248,320,1152,320C1056,320,960,320,864,320C768,320,672,320,576,320C480,320,384,320,288,320C192,320,96,320,48,320L0,320Z"></path></svg>');
+  background-size: cover;
+  background-position: bottom;
+  z-index: 0;
 }
 
 .story-welcome {
-  background-color: rgba(255, 255, 255, 0.85);
-  padding: 30px;
-  border-radius: 15px;
-  margin-bottom: 30px;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+  background: rgba(255, 255, 255, 0.85);
+  padding: 25px;
+  border-radius: 16px;
+  margin-bottom: 25px;
+  box-shadow: 0 5px 20px rgba(108, 92, 231, 0.1);
+  border: 1px solid rgba(108, 92, 231, 0.15);
+  position: relative;
+  z-index: 1;
+  text-align: center;
+}
+
+.story-welcome h2 {
+  color: #7b2cbf;
+  font-size: 28px;
+  margin-bottom: 15px;
+  background: linear-gradient(to right, #7b2cbf, #3c096c);
+  -webkit-background-clip: text;
+  background-clip: text; /* 添加这一行解决警告 */
+  -webkit-text-fill-color: transparent;
+}
+
+.story-welcome p {
+  color: #5a189a;
+  margin-bottom: 20px;
+  font-size: 16px;
+}
+
+.sentiment-btn {
+  background: linear-gradient(to right, #ff9e7d, #ffd6a5);
+  color: #5a189a;
+  border: none;
+  border-radius: 20px;
+  padding: 10px 25px;
+  font-weight: 600;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s;
+}
+
+.sentiment-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 15px rgba(0, 0, 0, 0.15);
 }
 
 .message-list {
   flex: 1;
   overflow-y: auto;
   padding: 20px;
-  background-color: rgba(255, 255, 255, 0.9);
-  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 16px;
   margin-bottom: 20px;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 5px 20px rgba(108, 92, 231, 0.08);
+  position: relative;
+  z-index: 1;
+  min-height: 300px;
+  border: 1px solid rgba(108, 92, 231, 0.1);
 }
 
 .message-item {
-  margin-bottom: 20px;
+  margin-bottom: 25px;
 }
 
 .message-content {
   display: flex;
-  max-width: 80%;
+  max-width: 85%;
   margin: 0 auto;
 }
 
@@ -509,6 +518,13 @@ onMounted(() => {
 
 .message-avatar {
   margin: 0 15px;
+  display: flex;
+  align-items: flex-start;
+}
+
+.message-avatar .el-avatar {
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.08);
+  border: 2px solid white;
 }
 
 .message-text {
@@ -516,100 +532,159 @@ onMounted(() => {
 }
 
 .message-meta {
-  font-size: 12px;
-  color: #666;
-  margin-bottom: 5px;
+  font-size: 13px;
+  color: #7b2cbf;
+  margin-bottom: 6px;
+  display: flex;
+  justify-content: space-between;
+}
+
+.message-role {
+  font-weight: 600;
+}
+
+.message-time {
+  opacity: 0.7;
 }
 
 .message-body {
   background: white;
-  padding: 12px 18px;
-  border-radius: 12px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  padding: 15px 20px;
+  border-radius: 16px;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.06);
   white-space: pre-line;
-}
-
-.sentiment-result {
-  margin-top: 10px;
-  padding: 10px;
-  background-color: rgba(255, 255, 255, 0.8);
-  border-radius: 8px;
-}
-
-.recommendation {
-  margin: 5px 0 0;
-  font-size: 0.9em;
-  color: #666;
-}
-
-.detail {
-  margin: 5px 0 0;
-  font-size: 0.9em;
-  color: #444;
-  white-space: pre-line;
-}
-
-.analysis-item {
-  display: flex;
-  align-items: center;
-  margin: 5px 0;
-  padding: 5px;
-  background-color: rgba(255, 255, 255, 0.5);
-  border-radius: 4px;
-}
-
-.analysis-score {
-  font-size: 0.9em;
-  color: #666;
-}
-
-.input-area {
-  padding: 20px;
-  background-color: rgba(255, 255, 255, 0.9);
-  border-radius: 15px;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-}
-
-.popular-themes ul {
-  list-style-type: none;
-  padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.popular-themes li {
-  font-size: 0.9rem;
-  padding: 4px 10px;
-  margin: 0;
-  background-color: rgba(108, 92, 231, 0.1);
-  border-radius: 6px;
-  color: #6c5ce7;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.popular-themes li:hover {
-  background-color: rgba(108, 92, 231, 0.2);
-  transform: translateY(-2px);
+  line-height: 1.6;
+  font-size: 15px;
+  position: relative;
+  border: 1px solid #f0f0f0;
 }
 
 .user .message-body {
-  background: linear-gradient(135deg, #6c5ce7 0%, #a29bfe 100%);
+  background: linear-gradient(to right, #9d4edd, #7b2cbf);
   color: white;
+  border-radius: 16px 16px 4px 16px;
 }
 
-.sentiment-btn {
-  margin-left: 10px;
-  background: linear-gradient(135deg, #ff7675 0%, #fdcb6e 100%);
-  color: white;
+.ai .message-body {
+  background: linear-gradient(to right, #e0c3fc, #c2e9fb);
+  border-radius: 16px 16px 16px 4px;
+}
+
+/* 输入区域美化 */
+.input-area {
+  padding: 25px;
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(108, 92, 231, 0.1);
+  position: relative;
+  z-index: 1;
+  border: 1px solid rgba(108, 92, 231, 0.15);
+}
+
+.input-area::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, #ff9e7d, #9d4edd, #55efc4);
+  border-radius: 2px;
+  opacity: 0.7;
+}
+
+.popular-themes {
+  margin-bottom: 20px;
+}
+
+.popular-themes h3 {
+  color: #7b2cbf;
+  margin-bottom: 15px;
+  font-size: 17px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+}
+
+.theme-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+}
+
+.theme-tag {
+  background: linear-gradient(to right, #e0c3fc, #c2e9fb);
+  color: #5a189a;
   border: none;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: all 0.3s;
+  padding: 8px 18px;
+  font-weight: 500;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.08);
+}
+
+.theme-tag:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.12);
+  background: linear-gradient(to right, #d0b3fa, #b2d9f9);
+}
+
+.input-container {
+  display: flex;
+  gap: 15px;
+  align-items: center;
+}
+
+.story-input {
+  flex: 1;
+}
+
+.story-input :deep(.el-input__inner) {
+  height: 52px;
+  padding-left: 45px;
+  border-radius: 16px;
+  border: 2px solid #e0c3fc;
+  font-size: 15px;
+  transition: all 0.3s;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.story-input :deep(.el-input__inner:focus) {
+  border-color: #9d4edd;
+  box-shadow: 0 0 0 2px rgba(157, 78, 221, 0.2);
+}
+
+.story-input :deep(.el-input__prefix) {
+  left: 15px;
+  color: #9d4edd;
+  font-size: 20px;
 }
 
 .send-btn {
-  margin-top: 10px;
-  background: linear-gradient(135deg, #00b894 0%, #55efc4 100%);
+  background: linear-gradient(to right, #9d4edd, #7b2cbf);
   color: white;
   border: none;
+  height: 52px;
+  padding: 0 35px;
+  border-radius: 16px;
+  font-weight: 600;
+  font-size: 16px;
+  transition: all 0.3s;
+  box-shadow: 0 5px 15px rgba(157, 78, 221, 0.3);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.send-btn:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 20px rgba(157, 78, 221, 0.4);
+}
+
+.send-btn:active {
+  transform: translateY(1px);
 }
 </style>

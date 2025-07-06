@@ -1,6 +1,0 @@
-2025-07-02 18:46:01,940 INFO: 收到故事生成请求: age=6, theme=勇敢, requirements=, length=500 [in E:\pycode\kids_story\backend\app3.py:464]
-2025-07-02 18:46:16,806 INFO: 故事生成成功，共21个句子 [in E:\pycode\kids_story\backend\app3.py:488]
-2025-07-02 18:46:31,133 INFO: 收到故事生成请求: age=6, theme=勇敢, requirements=小狗, length=500 [in E:\pycode\kids_story\backend\app3.py:464]
-2025-07-02 18:46:43,487 INFO: 故事生成成功，共13个句子 [in E:\pycode\kids_story\backend\app3.py:488]
-2025-07-02 18:47:30,485 INFO: 收到故事生成请求: age=6, theme=勇敢, requirements=小狗, length=1000 [in E:\pycode\kids_story\backend\app3.py:464]
-2025-07-02 18:47:51,529 INFO: 故事生成成功，共26个句子 [in E:\pycode\kids_story\backend\app3.py:488]

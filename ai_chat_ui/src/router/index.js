@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import HomeView from '../views/HomeView.vue'
 import LoginView from '../views/LoginView.vue'
+import SentimentAnalysisView from '../views/SentimentAnalysisView.vue'
 import { useAuthStore } from '../stores/auth'
 
 const routes = [
@@ -14,6 +15,12 @@ const routes = [
     path: '/login',
     name: 'login',
     component: LoginView
+  },
+  {
+    path: '/sentiment-analysis',
+    name: 'sentiment-analysis',
+    component: SentimentAnalysisView,
+    meta: { requiresAuth: true }
   }
 ]
 

@@ -1,27 +1,29 @@
 from flask import Flask, request, jsonify, Response
-import json
 from flask_cors import CORS
+import os
+from dotenv import load_dotenv
+import requests
+import json
 import jwt as pyjwt
 import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 import sqlite3
-import os
-from dotenv import load_dotenv
-import requests
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
 from langchain_community.llms import Tongyi
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import TextLoader
-from transformers import pipeline
 
-# 加载环境变量
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
+
+# 通义千问API配置
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET') or 'your-secret-key'
 app.config['TONGYI_API_KEY'] = os.getenv('DASHSCOPE_API_KEY')
+DASHSCOPE_API_KEY = os.getenv('DASHSCOPE_API_KEY')
+DASHSCOPE_API_URL = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation'
 
 # 初始化LangChain组件
 llm = Tongyi(
@@ -40,7 +42,6 @@ story_template = """#角色
 -你会根据儿童对话中的要求来为他们讲故事
 -你会根据用户对话或者对故事评价中的语气及描述来评判用户的心理情绪并总结后输出
 -你会根据之前对用户的心理情绪评估来为他们讲述合适的故事
-
 
 #限制
 -不得违反事实或者造假
@@ -62,49 +63,20 @@ text_splitter = RecursiveCharacterTextSplitter(
     chunk_overlap=200
 )
 
-# 情感分析模型
-try:
-    print("正在初始化情感分析模型...")
-    sentiment_analyzer = pipeline(
-        "text-classification",
-        model="finiteautomata/bertweet-base-sentiment-analysis",
-        tokenizer="finiteautomata/bertweet-base-sentiment-analysis",
-        device="cpu",
-        return_all_scores=True
-    )
-    print("情感分析模型初始化成功")
-except Exception as e:
-    print(f"初始化情感分析模型失败: {str(e)}")
-    sentiment_analyzer = None
-
-
 # 初始化数据库
 def init_db():
     conn = sqlite3.connect('database.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (
-                     id
-                     INTEGER
-                     PRIMARY
-                     KEY
-                     AUTOINCREMENT,
-                     username
-                     TEXT
-                     UNIQUE
-                     NOT
-                     NULL,
-                     password
-                     TEXT
-                     NOT
-                     NULL
+                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     username TEXT UNIQUE NOT NULL,
+                     password TEXT NOT NULL
                  )''')
     conn.commit()
     conn.close()
 
-
 init_db()
-
 
 # JWT工具函数
 def create_token(user_id):
@@ -113,7 +85,6 @@ def create_token(user_id):
         'exp': datetime.datetime.utcnow() + datetime.timedelta(days=1)
     }
     return pyjwt.encode(payload, app.config['SECRET_KEY'], algorithm='HS256')
-
 
 # 用户注册
 @app.route('/api/register', methods=['POST'])
@@ -154,7 +125,6 @@ def register():
             'action': 'redirect_to_login'
         }), 400
 
-
 # 用户登录
 @app.route('/api/login', methods=['POST'])
 def login():
@@ -176,7 +146,6 @@ def login():
 
     token = create_token(user[0])
     return jsonify({'token': token, 'user_id': user[0]})
-
 
 # 调用通义千问API
 @app.route('/api/ask', methods=['POST'])
@@ -236,7 +205,6 @@ def ask_question():
     except ValueError as e:
         app.logger.error(f'API响应解析失败: {str(e)}')
         return jsonify({'error': str(e)}), 500
-
 
 @app.route('/api/generate_story', methods=['POST'])
 def generate_story():
@@ -311,7 +279,6 @@ def generate_story():
         app.logger.error(f"故事生成失败: {str(e)}")
         return jsonify({'error': f'故事生成失败: {str(e)}'}), 500
 
-
 # 加载故事素材
 @app.route('/api/load_stories', methods=['POST'])
 def load_stories():
@@ -342,10 +309,8 @@ def load_stories():
     except Exception as e:
         return jsonify({'error': f'加载故事失败: {str(e)}'}), 500
 
-
-# 情感分析API
-@app.route('/api/analyze_sentiment', methods=['POST'])
-def analyze_sentiment():
+@app.route('/api/analyze_sentiment2', methods=['POST'])
+def analyze_sentiment2():
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
         return jsonify({'error': '未提供有效的认证token'}), 401
@@ -359,72 +324,145 @@ def analyze_sentiment():
     except pyjwt.InvalidTokenError:
         return jsonify({'error': '无效的token'}), 401
 
-    if 'text' not in request.json:
-        return jsonify({'error': '缺少文本参数'}), 400
-
-    if not sentiment_analyzer:
-        return jsonify({'error': '情感分析服务暂不可用，请稍后再试'}), 503
-
     try:
-        text = request.json['text']
-        print(f"开始情感分析: {text[:50]}...")
+        data = request.get_json()
+        messages = data.get('messages', [])
+        
+        if not messages:
+            return jsonify({'error': '没有提供消息内容'}), 400
 
-        # 文本分块处理(每块500字符)
-        chunk_size = 500
-        chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+        # 收集所有消息的时间戳
+        timestamps = []
+        for msg in messages:
+            timestamp = msg.get('timestamp')
+            # 确保时间戳是有效的日期格式
+            if timestamp and isinstance(timestamp, str) and 'T' in timestamp:
+                try:
+                    # 验证并标准化时间格式
+                    dt = datetime.datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                    timestamps.append(dt.isoformat())
+                except ValueError:
+                    timestamps.append(datetime.datetime.now().isoformat())
+            else:
+                # 没有时间戳或格式无效，使用当前时间
+                timestamps.append(datetime.datetime.now().isoformat())
+        
+        # 改进的提示词，确保返回正确的JSON格式
+        prompt = f"""请分析以下对话的情感倾向,严格按照要求返回JSON格式数据:
+        {{
+            "overall": {{
+                "label": "负面/中性/正面", 
+                "score": 0.85,  // 0-1之间的小数
+                "recommendation": "建议内容"
+            }},
+            "daily": [
+                {{
+                    "date": "YYYY-MM-DD",  // 仅日期部分，不要时间
+                    "label": "负面/中性/正面", 
+                    "score": 0.75  // 0-1之间的小数
+                }}
+            ],
+            "samples": [
+                {{
+                    "content": "消息内容", 
+                    "sentiment": {{
+                        "label": "负面/中性/正面", 
+                        "score": 0.9  // 0-1之间的小数
+                    }}
+                }}
+            ]
+        }}
+        
+        重要说明：
+        1. 所有score必须是0-1之间的小数
+        2. label只能使用"负面"、"中性"、"正面"三种值
+        3. 样本消息从原始对话中选取最具代表性的3-5条
+        4. 每日情感变化按日期分组分析
+        5. 日期格式必须为YYYY-MM-DD(不要时间部分)
+        
+        对话记录:
+        {chr(10).join([f"{msg.get('timestamp', '未知时间')} {msg['role']}: {msg['content']}" for msg in messages])}"""
 
-        results = []
-        for chunk in chunks:
-            try:
-                print(f"正在分析文本块: {chunk[:50]}...")
-                chunk_result = sentiment_analyzer(chunk)
-                print(f"原始分析结果: {chunk_result}")
-
-                # 处理返回结果
-                if isinstance(chunk_result, list):
-                    if len(chunk_result) > 0:
-                        if isinstance(chunk_result[0], dict) and 'label' in chunk_result[0]:
-                            results.extend(chunk_result)
-                        elif isinstance(chunk_result[0], list):
-                            results.extend([item for sublist in chunk_result for item in sublist])
-
-            except Exception as e:
-                print(f"分析文本块时出错: {str(e)}")
-                continue
-
-        if not results:
-            raise ValueError("情感分析未返回有效结果")
-
-        print(f"最终结果集: {results}")
-
-        # 计算整体情感
-        avg_scores = {}
-        label_mapping = {'POS': 'POSITIVE', 'NEU': 'NEUTRAL', 'NEG': 'NEGATIVE'}
-        for orig_label, mapped_label in label_mapping.items():
-            scores = [r['score'] for r in results if r.get('label') == orig_label]
-            avg_scores[mapped_label] = sum(scores) / len(scores) if scores else 0
-
-        primary_sentiment = max(avg_scores, key=avg_scores.get)
-        primary_score = avg_scores[primary_sentiment]
-
-        # 生成详细建议
-        recommendations = {
-            'POSITIVE': '内容积极向上，适合继续阅读类似故事',
-            'NEUTRAL': '内容情感中性，可以尝试更有趣的主题',
-            'NEGATIVE': '检测到负面情绪，建议阅读积极内容调节心情'
+        headers = {
+            "Authorization": f"Bearer {DASHSCOPE_API_KEY}",
+            "Content-Type": "application/json"
         }
-
+        
+        payload = {
+            "model": "qwen-turbo",
+            "input": {
+                "messages": [{
+                    "role": "user", 
+                    "content": prompt
+                }]
+            }
+        }
+        
+        response = requests.post(
+            DASHSCOPE_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+        response.raise_for_status()
+        
+        result = response.json()
+        if 'output' not in result or 'text' not in result['output']:
+            raise ValueError('无效的API响应格式')
+        
+        try:
+            analysis_result = json.loads(result['output']['text'])
+            
+            # 修正分数值
+            def fix_scores(data):
+                if isinstance(data, dict):
+                    for key, value in data.items():
+                        if key == 'score' and isinstance(value, (int, float)) and value > 1:
+                            data[key] = value / 100.0
+                        elif key == 'date' and isinstance(value, str) and 'T' in value:
+                            # 确保日期格式正确
+                            data[key] = value.split('T')[0]
+                        else:
+                            fix_scores(value)
+                elif isinstance(data, list):
+                    for item in data:
+                        fix_scores(item)
+            
+            fix_scores(analysis_result)
+            
+            # 添加时间戳到样本消息
+            if 'samples' in analysis_result:
+                for i, sample in enumerate(analysis_result['samples']):
+                    if i < len(timestamps):
+                        sample['timestamp'] = timestamps[i]
+            
+            # 确保daily日期格式正确
+            for day in analysis_result.get('daily', []):
+                if 'date' in day and isinstance(day['date'], str):
+                    if 'T' in day['date']:
+                        day['date'] = day['date'].split('T')[0]
+                    elif len(day['date']) > 10:
+                        day['date'] = day['date'][:10]
+            
+            return jsonify(analysis_result)
+        except json.JSONDecodeError:
+            return jsonify({
+                'error': 'API返回格式不正确',
+                'raw_response': result['output']['text']
+            }), 500
+            
+    except requests.exceptions.RequestException as e:
         return jsonify({
-            'analysis': results,
-            'primary_sentiment': primary_sentiment,
-            'primary_score': primary_score,
-            'recommendation': recommendations[primary_sentiment],
-            'detail': f"分析了{len(chunks)}个文本块，综合评估情感为{primary_sentiment}"
-        })
+            'error': '请求AI服务失败',
+            'details': str(e)
+        }), 500
     except Exception as e:
-        print(f"情感分析处理失败: {str(e)}")
-        return jsonify({'error': f'情感分析失败: {str(e)}'}), 500
-
+        import traceback
+        return jsonify({
+            'error': '情感分析失败',
+            'details': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(port=5000, debug=True)
