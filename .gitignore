@@ -4,7 +4,7 @@
 
 # 依赖目录
 ai_chat_ui/node_modules/
-
+ai_chat_ui/node_modules/
 # 环境文件
 .env
 backend/.env
