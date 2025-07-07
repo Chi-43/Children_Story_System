@@ -19,7 +19,7 @@ createApp({
         // 用户认证处理
         const handleAuth = async () => {
             const url = isLogin.value ? `${apiBaseUrl}/api/login` : `${apiBaseUrl}/api/register`;
-            
+
             try {
                 const response = await fetch(url, {
                     method: 'POST',
@@ -31,9 +31,9 @@ createApp({
                         password: authForm.value.password
                     })
                 });
-                
+
                 const data = await response.json();
-                
+
                 if (response.ok) {
                     authToken.value = data.token;
                     currentUser.value = {

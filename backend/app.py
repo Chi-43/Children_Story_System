@@ -1,32 +1,66 @@
-from flask import Flask, request, jsonify, Response
-from flask_cors import CORS
+# 标准库导入
 import os
+import json
+import time
+import datetime
+from pathlib import Path
+from typing import List, Optional
+
+# 第三方库导入
 from dotenv import load_dotenv
 import requests
-import json
 import jwt as pyjwt
-import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 import mysql.connector
 from mysql.connector import Error
-import time
+
+# Flask相关
+from flask import Flask, request, jsonify, Response
+from flask_cors import CORS
+
+# LangChain相关
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
 from langchain_community.llms import Tongyi
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import TextLoader
 
+# 自定义模块
+from rag_service import RAGService
+# 在顶部导入后立即配置日志
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# 然后创建logger实例（这会让import不再灰色）
+logger = logging.getLogger(__name__)
+logger.info("应用初始化开始")  # 实际使用
+# 加载环境变量
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
+# 初始化 RAG
+rag = RAGService()
+app.logger.info("正在初始化 RAG 系统...")  # 使用 Flask 自带的 logger
+
+try:
+    rag_status = rag.init_rag(data_dir="story_data")  # 确保目录存在
+    app.logger.info(f"RAG 初始化状态: {rag_status}")
+
+    if rag_status.get("status") != "success":
+        app.logger.error(f"RAG 初始化失败: {rag_status}")
+        # 可以在这里决定是否要终止启动
+except Exception as e:
+    app.logger.error(f"RAG 初始化异常: {str(e)}", exc_info=True)
 
 # 通义千问API配置
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET') or 'your-secret-key'
 app.config['TONGYI_API_KEY'] = os.getenv('DASHSCOPE_API_KEY')
 DASHSCOPE_API_KEY = os.getenv('DASHSCOPE_API_KEY')
 DASHSCOPE_API_URL = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation'
-
 
 # 初始化LangChain组件
 llm = Tongyi(
@@ -66,11 +100,11 @@ story_prompt = PromptTemplate(
 
 story_chain = story_prompt | llm
 
-# 文本分割器
-text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=1000,
-    chunk_overlap=200
-)
+# # 文本分割器
+# text_splitter = RecursiveCharacterTextSplitter(
+#     chunk_size=1000,
+#     chunk_overlap=200
+# )
 
 import mysql.connector.pooling
 
@@ -89,11 +123,12 @@ dbconfig = {
 
 connection_pool = mysql.connector.pooling.MySQLConnectionPool(**dbconfig)
 
+
 def get_mysql_connection():
     max_retries = 3
     last_error = None
     conn = None
-    
+
     for attempt in range(max_retries):
         try:
             conn = connection_pool.get_connection()
@@ -101,7 +136,7 @@ def get_mysql_connection():
             with conn.cursor() as cursor:
                 cursor.execute("SELECT 1")
                 cursor.fetchall()  # 确保读取所有结果
-            
+
             # 检查连接是否超过1小时未使用
             if hasattr(conn, '_creation_time'):
                 if time.time() - conn._creation_time > 3600:
@@ -109,7 +144,7 @@ def get_mysql_connection():
             else:
                 conn._creation_time = time.time()
             return conn
-            
+
         except mysql.connector.Error as err:
             last_error = err
             app.logger.error(f"数据库连接尝试 {attempt + 1}/{max_retries} 失败: {err}")
@@ -117,9 +152,10 @@ def get_mysql_connection():
                 time.sleep(1)  # 等待1秒后重试
             if conn and conn.is_connected():
                 conn.close()
-    
+
     # 所有重试都失败后抛出最后一个错误
     raise mysql.connector.PoolError(f"无法获取数据库连接: {last_error}")
+
 
 # 初始化数据库
 def init_db():
@@ -137,50 +173,127 @@ def init_db():
             with conn.cursor() as cursor:
                 # 创建users表（必须先创建，因为其他表引用它）
                 cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS users (
-                        id INT AUTO_INCREMENT PRIMARY KEY,
-                        username VARCHAR(255) UNIQUE NOT NULL,
-                        password VARCHAR(255) NOT NULL
-                    )
-                """)
+                               CREATE TABLE IF NOT EXISTS users
+                               (
+                                   id
+                                   INT
+                                   AUTO_INCREMENT
+                                   PRIMARY
+                                   KEY,
+                                   username
+                                   VARCHAR
+                               (
+                                   255
+                               ) UNIQUE NOT NULL,
+                                   password VARCHAR
+                               (
+                                   255
+                               ) NOT NULL
+                                   )
+                               """)
 
                 # 创建conversations表
                 cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS conversations (
-                        id INT AUTO_INCREMENT PRIMARY KEY,
-                        user_id INT NOT NULL,
-                        title VARCHAR(255) NOT NULL,
-                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-                    )
-                """)
+                               CREATE TABLE IF NOT EXISTS conversations
+                               (
+                                   id
+                                   INT
+                                   AUTO_INCREMENT
+                                   PRIMARY
+                                   KEY,
+                                   user_id
+                                   INT
+                                   NOT
+                                   NULL,
+                                   title
+                                   VARCHAR
+                               (
+                                   255
+                               ) NOT NULL,
+                                   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                                   FOREIGN KEY
+                               (
+                                   user_id
+                               ) REFERENCES users
+                               (
+                                   id
+                               ) ON DELETE CASCADE
+                                   )
+                               """)
 
                 # 创建chat_history表
                 cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS chat_history (
-                        id INT AUTO_INCREMENT PRIMARY KEY,
-                        user_id INT NOT NULL,
-                        role ENUM('user', 'assistant') NOT NULL,
-                        content TEXT NOT NULL,
-                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        conversation_id INT,
-                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                        FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-                    )
-                """)
+                               CREATE TABLE IF NOT EXISTS chat_history
+                               (
+                                   id
+                                   INT
+                                   AUTO_INCREMENT
+                                   PRIMARY
+                                   KEY,
+                                   user_id
+                                   INT
+                                   NOT
+                                   NULL,
+                                   role
+                                   ENUM
+                               (
+                                   'user',
+                                   'assistant'
+                               ) NOT NULL,
+                                   content TEXT NOT NULL,
+                                   timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                                   conversation_id INT,
+                                   FOREIGN KEY
+                               (
+                                   user_id
+                               ) REFERENCES users
+                               (
+                                   id
+                               ) ON DELETE CASCADE,
+                                   FOREIGN KEY
+                               (
+                                   conversation_id
+                               ) REFERENCES conversations
+                               (
+                                   id
+                               )
+                                 ON DELETE CASCADE
+                                   )
+                               """)
 
                 # 创建story_history表
                 cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS story_history (
-                        id INT AUTO_INCREMENT PRIMARY KEY,
-                        user_id INT NOT NULL,
-                        input_prompt TEXT,
-                        thinking TEXT,
-                        story TEXT,
-                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-                    )
-                """)
+                               CREATE TABLE IF NOT EXISTS story_history
+                               (
+                                   id
+                                   INT
+                                   AUTO_INCREMENT
+                                   PRIMARY
+                                   KEY,
+                                   user_id
+                                   INT
+                                   NOT
+                                   NULL,
+                                   input_prompt
+                                   TEXT,
+                                   thinking
+                                   TEXT,
+                                   story
+                                   TEXT,
+                                   timestamp
+                                   DATETIME
+                                   DEFAULT
+                                   CURRENT_TIMESTAMP,
+                                   FOREIGN
+                                   KEY
+                               (
+                                   user_id
+                               ) REFERENCES users
+                               (
+                                   id
+                               ) ON DELETE CASCADE
+                                   )
+                               """)
         except Error as e:
             app.logger.error(f"数据库初始化失败: {str(e)}")
             raise
@@ -192,7 +305,9 @@ def init_db():
         if conn and conn.is_connected():
             conn.close()
 
+
 init_db()
+
 
 # JWT
 def create_token(user_id):
@@ -201,6 +316,7 @@ def create_token(user_id):
         'exp': datetime.datetime.utcnow() + datetime.timedelta(days=1)
     }
     return pyjwt.encode(payload, app.config['SECRET_KEY'], algorithm='HS256')
+
 
 # 保存消息与故事
 def save_chat_message(user_id, role, content, conversation_id=None):
@@ -219,6 +335,7 @@ def save_chat_message(user_id, role, content, conversation_id=None):
     conn.commit()
     conn.close()
 
+
 def save_story_history(user_id, input_prompt, thinking, story):
     conn = get_mysql_connection()
     cursor = conn.cursor()
@@ -231,6 +348,10 @@ def save_story_history(user_id, input_prompt, thinking, story):
 
 
 # 注册接口
+@app.route('/api/rag_status', methods=['GET'])
+def rag_status():
+    return jsonify(rag.get_status())
+
 @app.route('/api/register', methods=['POST'])
 def register():
     data = request.get_json()
@@ -254,6 +375,7 @@ def register():
     except Error as e:
         return jsonify({'error': '数据库错误', 'message': str(e)}), 500
 
+
 # 登录接口
 @app.route('/api/login', methods=['POST'])
 def login():
@@ -272,6 +394,7 @@ def login():
         return jsonify({'token': token, 'user_id': user[0]})
     except Error as e:
         return jsonify({'error': '数据库错误', 'message': str(e)}), 500
+
 
 # 调用通义千问API
 @app.route('/api/ask', methods=['POST'])
@@ -332,12 +455,14 @@ def ask_question():
         app.logger.error(f'API响应解析失败: {str(e)}')
         return jsonify({'error': str(e)}), 500
 
+
 # 故事生成接口（流式）
 @app.route('/api/generate_story', methods=['POST'])
 def generate_story():
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
         return jsonify({'error': '未提供有效的认证token'}), 401
+
     token = auth_header.split(' ')[1]
     try:
         payload = pyjwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
@@ -347,22 +472,41 @@ def generate_story():
     except pyjwt.InvalidTokenError:
         return jsonify({'error': '无效的token'}), 401
 
+    # 获取请求数据
     data = request.get_json()
     if not data or 'prompt' not in data:
         return jsonify({'error': '缺少prompt参数'}), 400
 
-    prompt_content = story_template.format(message=data['prompt'])
+    # 保存用户输入
     save_chat_message(user_id, 'user', data['prompt'])
 
+    # 使用RAG检索相关素材
+    try:
+        rag_docs = rag.search(data['prompt']) if rag else []
+        context = "\n---\n".join([d.page_content for d in rag_docs])
+
+        # 构建增强提示词
+        enhanced_prompt = f"{story_template}\n\n相关素材参考:\n{context}".format(
+            message=data['prompt']
+        )
+    except Exception as e:
+        # RAG检索失败时回退到原始提示词
+        enhanced_prompt = story_template.format(message=data['prompt'])
+        app.logger.error(f"RAG检索失败: {str(e)}")
+
+    # 准备API请求
     headers = {
         "Authorization": f"Bearer {DASHSCOPE_API_KEY}",
         "Content-Type": "application/json",
         "X-DashScope-SSE": "enable"
     }
-    payload_post = {
+    payload = {
         "model": "qwen-turbo",
         "input": {
-            "messages": [{"role": "user", "content": prompt_content}]
+            "messages": [{
+                "role": "user",
+                "content": enhanced_prompt
+            }]
         },
         "parameters": {
             "incremental_output": True,
@@ -375,21 +519,25 @@ def generate_story():
 
     def generate():
         try:
-            with requests.post(DASHSCOPE_API_URL, json=payload_post, headers=headers, stream=True, timeout=30) as response:
+            with requests.post(DASHSCOPE_API_URL, json=payload, headers=headers, stream=True, timeout=30) as response:
                 response.raise_for_status()
+
                 for line in response.iter_lines():
                     if line:
                         decoded_line = line.decode('utf-8')
                         if decoded_line.startswith('data:'):
                             try:
                                 data_chunk = json.loads(decoded_line[5:])
-                                text = data_chunk['output'].get('text', '')
-                                result_buffer.append(text)
-                                yield f"data: {json.dumps({'text': text})}\n\n"
-                            except Exception:
+                                if 'output' in data_chunk and 'text' in data_chunk['output']:
+                                    text = data_chunk['output']['text']
+                                    result_buffer.append(text)
+                                    yield f"data: {json.dumps({'text': text})}\n\n"
+                            except (json.JSONDecodeError, KeyError) as e:
+                                app.logger.error(f"流数据解析错误: {str(e)}")
                                 continue
         except Exception as e:
-            yield f"data: {json.dumps({'error': '生成中断'})}\n\n"
+            app.logger.error(f"流式请求失败: {str(e)}")
+            yield f"data: {json.dumps({'error': '故事生成中断'})}\n\n"
 
     def finalize():
         full_text = ''.join(result_buffer)
@@ -415,7 +563,7 @@ def save_chat():
     if not auth_header or not auth_header.startswith('Bearer '):
         app.logger.error('未提供token')
         return jsonify({'error': '未提供token'}), 401
-        
+
     token = auth_header.split(' ')[1]
     try:
         payload = pyjwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
@@ -433,45 +581,45 @@ def save_chat():
     try:
         conn = get_mysql_connection()
         cursor = conn.cursor()
-        
+
         # 检查conversation_id是否存在
         conversation_id = data.get('conversation_id')
         if conversation_id:
             # 验证conversation_id属于当前用户
-            cursor.execute("SELECT id FROM conversations WHERE id=%s AND user_id=%s", 
-                          (conversation_id, user_id))
+            cursor.execute("SELECT id FROM conversations WHERE id=%s AND user_id=%s",
+                           (conversation_id, user_id))
             if not cursor.fetchone():
                 app.logger.error(f'无效的conversation_id: {conversation_id}')
                 return jsonify({'error': '无效的对话ID'}), 400
-            
+
             sql = """
-                INSERT INTO chat_history 
-                (user_id, role, content, conversation_id) 
-                VALUES (%s, %s, %s, %s)
-            """
+                  INSERT INTO chat_history
+                      (user_id, role, content, conversation_id)
+                  VALUES (%s, %s, %s, %s) \
+                  """
             params = (user_id, data['role'], data['content'], conversation_id)
         else:
             sql = """
-                INSERT INTO chat_history 
-                (user_id, role, content) 
-                VALUES (%s, %s, %s)
-            """
+                  INSERT INTO chat_history
+                      (user_id, role, content)
+                  VALUES (%s, %s, %s) \
+                  """
             params = (user_id, data['role'], data['content'])
 
         cursor.execute(sql, params)
         conn.commit()
         message_id = cursor.lastrowid
-        
+
         return jsonify({
             'id': message_id,
             'message': '保存成功',
             'conversation_id': conversation_id
         }), 201
-        
+
     except Error as e:
         app.logger.error(f'数据库错误: {str(e)}')
         return jsonify({
-            'error': '数据库错误', 
+            'error': '数据库错误',
             'message': str(e),
             'sql': sql,
             'params': params
@@ -501,6 +649,7 @@ def story_history():
     conn.close()
     return jsonify(rows)
 
+
 # 查询聊天历史
 @app.route('/api/chat_history', methods=['GET'])
 def chat_history():
@@ -520,6 +669,7 @@ def chat_history():
     rows = cursor.fetchall()
     conn.close()
     return jsonify(rows)
+
 
 # 创建新对话
 @app.route('/api/conversations', methods=['POST'])
@@ -556,6 +706,7 @@ def create_conversation():
     except Error as e:
         return jsonify({'error': '数据库错误', 'message': str(e)}), 500
 
+
 # 获取用户所有对话
 @app.route('/api/conversations', methods=['GET'])
 def get_conversations():
@@ -572,18 +723,21 @@ def get_conversations():
     conn = get_mysql_connection()
     cursor = conn.cursor(dictionary=True)
     cursor.execute("""
-        SELECT c.id, c.title, c.created_at, 
-               COUNT(m.id) as message_count,
-               MAX(m.timestamp) as last_updated
-        FROM conversations c
-        LEFT JOIN chat_history m ON c.id = m.conversation_id
-        WHERE c.user_id = %s
-        GROUP BY c.id
-        ORDER BY last_updated DESC
-    """, (user_id,))
+                   SELECT c.id,
+                          c.title,
+                          c.created_at,
+                          COUNT(m.id)      as message_count,
+                          MAX(m.timestamp) as last_updated
+                   FROM conversations c
+                            LEFT JOIN chat_history m ON c.id = m.conversation_id
+                   WHERE c.user_id = %s
+                   GROUP BY c.id
+                   ORDER BY last_updated DESC
+                   """, (user_id,))
     rows = cursor.fetchall()
     conn.close()
     return jsonify(rows)
+
 
 @app.route('/api/delete_chat', methods=['DELETE'])
 def delete_chat():
@@ -637,7 +791,7 @@ def analyze_sentiment2():
     try:
         data = request.get_json()
         messages = data.get('messages', [])
-        
+
         if not messages:
             return jsonify({'error': '没有提供消息内容'}), 400
 
@@ -656,7 +810,7 @@ def analyze_sentiment2():
             else:
                 # 没有时间戳或格式无效，使用当前时间
                 timestamps.append(datetime.datetime.now().isoformat())
-        
+
         # 改进的提示词，确保返回正确的JSON格式
         prompt = f"""请分析以下对话的情感倾向,严格按照要求返回JSON格式数据:
         {{
@@ -682,14 +836,14 @@ def analyze_sentiment2():
                 }}
             ]
         }}
-        
+
         重要说明：
         1. 所有score必须是0-1之间的小数
         2. label只能使用"负面"、"中性"、"正面"三种值
         3. 样本消息从原始对话中选取最具代表性的3-5条
         4. 每日情感变化按日期分组分析
         5. 日期格式必须为YYYY-MM-DD(不要时间部分)
-        
+
         对话记录:
         {chr(10).join([f"{msg.get('timestamp', '未知时间')} {msg['role']}: {msg['content']}" for msg in messages])}"""
 
@@ -697,17 +851,17 @@ def analyze_sentiment2():
             "Authorization": f"Bearer {DASHSCOPE_API_KEY}",
             "Content-Type": "application/json"
         }
-        
+
         payload = {
             "model": "qwen-turbo",
             "input": {
                 "messages": [{
-                    "role": "user", 
+                    "role": "user",
                     "content": prompt
                 }]
             }
         }
-        
+
         response = requests.post(
             DASHSCOPE_API_URL,
             headers=headers,
@@ -715,14 +869,14 @@ def analyze_sentiment2():
             timeout=30
         )
         response.raise_for_status()
-        
+
         result = response.json()
         if 'output' not in result or 'text' not in result['output']:
             raise ValueError('无效的API响应格式')
-        
+
         try:
             analysis_result = json.loads(result['output']['text'])
-            
+
             # 修正分数值
             def fix_scores(data):
                 if isinstance(data, dict):
@@ -737,15 +891,15 @@ def analyze_sentiment2():
                 elif isinstance(data, list):
                     for item in data:
                         fix_scores(item)
-            
+
             fix_scores(analysis_result)
-            
+
             # 添加时间戳到样本消息
             if 'samples' in analysis_result:
                 for i, sample in enumerate(analysis_result['samples']):
                     if i < len(timestamps):
                         sample['timestamp'] = timestamps[i]
-            
+
             # 确保daily日期格式正确
             for day in analysis_result.get('daily', []):
                 if 'date' in day and isinstance(day['date'], str):
@@ -753,14 +907,14 @@ def analyze_sentiment2():
                         day['date'] = day['date'].split('T')[0]
                     elif len(day['date']) > 10:
                         day['date'] = day['date'][:10]
-            
+
             return jsonify(analysis_result)
         except json.JSONDecodeError:
             return jsonify({
                 'error': 'API返回格式不正确',
                 'raw_response': result['output']['text']
             }), 500
-            
+
     except requests.exceptions.RequestException as e:
         return jsonify({
             'error': '请求AI服务失败',
@@ -773,6 +927,7 @@ def analyze_sentiment2():
             'details': str(e),
             'traceback': traceback.format_exc()
         }), 500
+
 
 @app.route('/api/db_status', methods=['GET'])
 def db_status():
@@ -789,6 +944,7 @@ def db_status():
         })
     except Error as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run(port=5000, debug=True)
