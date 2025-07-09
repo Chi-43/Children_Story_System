@@ -8,7 +8,9 @@ ai_chat_ui/node_modules/
 .env
 backend/.env
 test/
-
+backend/tests
+backend/__pycache__
+backend/tests/__pycache__
 
 # 教程目录
 LangChain-OpenTutorial-main/
